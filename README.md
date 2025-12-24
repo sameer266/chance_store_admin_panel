@@ -62,13 +62,5 @@ Example admin pages added in this project (URLs under the dashboard app):
 ## Templates & UI
 - Admin UI follows a consistent layout under `templates/dashboard/components/` (sidebar, base layout). Sales and Services pages share table and form styles.
 
-## Notes & Next steps
-- This repo focuses on admin operations and API — no public storefront is included.
-- For deploying to production: set `DEBUG=False`, configure allowed hosts, static/media serving, and a proper database.
-- If you want, I can:
-  - Register `Service` and `ServiceBooking` in Django admin with `ModelAdmin`.
-  - Add API serializers and example endpoints for Services/Bookings.
-
 ---
 
-If you want the README expanded with specific API endpoint docs or admin screenshots, tell me which endpoints you use most and I will add examples.
