@@ -1,131 +1,74 @@
-# Chance Store – How It Works
+# Chance Store — Admin Panel & API (Overview)
 
-Chance Store is a **Django-based admin backend system** that manages **online sales, offline (physical) sales, and service bookings** in one place.  
-All business operations are handled through the admin panel with automatic calculations and status updates.
+This repository contains the Django-based admin panel and API for Chance Store. The project provides a backend for managing products, inventory, orders, offline sales, suppliers, invoices, and services (service bookings). This repository does NOT include a customer-facing storefront — interactions are via the admin UI and API.
 
----
+## Quick summary
+- Purpose: Admin dashboard + API for managing store operations.
+- Scope: Admin users (staff/superuser) manage data; customers can be created/selected from admin or use API endpoints.
 
-## 1. User & Access Flow
-- Users are created using Django’s user system.
-- When an admin (superuser) is created:
-  - An **Admin role** is automatically assigned.
-  - A **User Profile** is created.
-- Regular users act as **customers**.
-- OTP verification can be used for additional user validation.
+## Key Features / Flows
+- Users & Roles: Django users with `UserRole` and `UserProfile` for admin/customer differentiation.
+- Products & Inventory: Categories, products, variants, stock, cost/price and per-product shipping.
+- Orders & Payments: Checkout, order snapshots (price, shipping, tax), invoice generation, payment status handling.
+- Offline Sales: Manual/physical sales entry with payments and outstanding balance tracking.
+- Suppliers & Purchases: Supplier records, purchases and purchase invoices.
+- Services & Bookings: Service types (e.g. Electrician, Plumber) and customer bookings with dates and status.
+- Notifications: Simple notification records for important events.
 
----
+## Project layout (important folders)
+- `ecommerce/` — Django project settings and root.
+- `dashboard/` — core app that implements admin views, models, templates and urls.
+- `templates/dashboard/` — admin UI templates (pages, components, sidebar, sales pages, services pages).
+- `api/` — API routes and views (exposed under `/api/`).
+- `media/` and `static/` — uploaded files and static assets.
 
-## 2. Product & Inventory Flow
-- Admin creates **categories** and **products**.
-- Each product stores:
-  - Price and cost price
-  - Stock quantity
-  - Variants (size, color, RAM, etc.)
-  - Shipping cost per product
-  - Estimated delivery time
-- Stock levels are updated automatically.
-- Product data is preserved in orders so past records never change.
+## Setup (local development)
+1. Create and activate a virtual environment.
+2. Install dependencies:
 
----
+```bash
+python -m venv .venv
+source .venv/Scripts/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-## 3. Cart & Checkout Flow
-- Customers add products to the cart.
-- Cart supports:
-  - Logged-in users
-  - Guest users (session-based)
-- During checkout:
-  - An order is created
-  - Product price, shipping cost, and delivery estimates are saved as snapshots
-  - Tax and discounts are applied
-- Order totals are recalculated automatically.
+3. Run migrations and create a superuser:
 
----
+```bash
+python manage.py makemigrations
+python manage.py migrate
+python manage.py createsuperuser
+```
 
-## 4. Order & Payment Flow
-- Orders support multiple payment methods.
-- Payment status controls order status:
-  - When payment becomes **Paid**, the order is automatically marked **Delivered**.
-- Order status and payment status stay in sync.
+4. Run the development server:
 
----
+```bash
+python manage.py runserver
+```
 
-## 5. Invoice Flow
-- A customer invoice is generated for each order.
-- Invoices store:
-  - Order totals
-  - Tax
-  - Discount
-  - Payment status
-- Invoice payment status automatically follows the order payment status.
+## Where to access the admin UI
+- Django admin: `/admin/` (default Django admin)
+- Custom admin dashboard pages: `/admin-dashboard/` (main entry for the project admin UI)
 
----
+Example admin pages added in this project (URLs under the dashboard app):
+- Services: `/admin-dashboard/services/`
+- Service Bookings: `/admin-dashboard/service-bookings/`
+- Sales (offline): `/admin-dashboard/sales/`
 
-## 6. Coupon & Discount Flow
-- Admin creates coupons with:
-  - Valid dates
-  - Usage limits
-  - Minimum purchase rules
-- Coupons are validated at checkout.
-- Discount amount is calculated automatically and applied to the order.
+## API
+- The project exposes API endpoints under `/api/`. Inspect the `api/` app to see available routes and representations.
+- The API is intended for integrations and mobile/admin clients; authentication is configured in the project settings (check `ecommerce/settings.py`).
 
----
+## Templates & UI
+- Admin UI follows a consistent layout under `templates/dashboard/components/` (sidebar, base layout). Sales and Services pages share table and form styles.
 
-## 7. Supplier & Purchase Flow
-- Admin manages suppliers.
-- Purchases are recorded from suppliers.
-- Each purchase:
-  - Stores product snapshots
-  - Automatically calculates totals
-- A purchase invoice is generated automatically to preserve historical data.
+## Notes & Next steps
+- This repo focuses on admin operations and API — no public storefront is included.
+- For deploying to production: set `DEBUG=False`, configure allowed hosts, static/media serving, and a proper database.
+- If you want, I can:
+  - Register `Service` and `ServiceBooking` in Django admin with `ModelAdmin`.
+  - Add API serializers and example endpoints for Services/Bookings.
 
 ---
 
-## 8. Offline (Physical) Sales Flow
-- Admin creates offline customers.
-- Sales are entered manually with:
-  - Products
-  - Total amount
-  - Paid amount
-- System automatically calculates:
-  - Outstanding balance
-  - Payment status (Paid / Partially Paid / Unpaid)
-- Multiple payments can be recorded for one sale.
-
----
-
-## 9. Services Booking Flow
-- Admin creates service types (Electrician, Plumber, etc.).
-- Customers are assigned to service bookings.
-- Each booking tracks:
-  - Selected service
-  - Booking date
-  - Status (Pending / Completed)
-
----
-
-## 10. Notifications Flow
-- Notifications are generated for:
-  - Order updates
-  - Product updates
-  - Messages
-- Users can view and mark notifications as read.
-
----
-
-## 11. Global Rules & Automation
-- A single global tax percentage is applied to all orders.
-- Shipping cost is calculated per product.
-- Django signals ensure:
-  - Automatic total calculations
-  - Invoice synchronization
-  - Data consistency across orders, sales, and purchases
-
----
-
-## Overall Workflow
-Chance Store works as a **central control system** where:
-- Online orders
-- Offline sales
-- Service bookings  
-
-are managed together with **automatic calculations, invoices, and status handling**, ensuring accurate and reliable business records.
+If you want the README expanded with specific API endpoint docs or admin screenshots, tell me which endpoints you use most and I will add examples.
