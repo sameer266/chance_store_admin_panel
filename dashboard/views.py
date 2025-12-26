@@ -1464,6 +1464,17 @@ def change_password_view(request):
 def admin_suppliers_list(request):
     search = request.GET.get('search', '')
     suppliers = Supplier.objects.all().order_by('name')
+    total_suppliers = suppliers.count()
+    total_amount_outstanding = 0
+    purchase=Purchase.objects.all()
+    for sup in suppliers:
+        outstanding = purchase.filter(supplier=sup).aggregate(
+            total_outstanding=Sum(
+                'invoice__total_amount',
+                filter=Q(invoice__payment_status__in=['pending', 'partial', 'overdue'])
+            )
+        )['total_outstanding'] or 0
+        total_amount_outstanding += outstanding
     
     if search:
         suppliers = suppliers.filter(
@@ -1490,6 +1501,8 @@ def admin_suppliers_list(request):
     
     return render(request, 'dashboard/pages/supplier/suppliers_list.html', {
         'suppliers': suppliers,
+        'total_suppliers': total_suppliers,
+        'total_amount_outstanding': total_amount_outstanding,
     })
 
 
