@@ -4,8 +4,8 @@
 {% block content %}
 <div class="max-w-3xl mx-auto p-4 sm:p-6">
   <h1 class="text-2xl font-semibold text-gray-900 mb-4">Edit Service</h1>
-  <div class="bg-white border border-gray-200 rounded-lg p-4">
-    <form method="post">
+    <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <form method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <div class="grid grid-cols-1 gap-3">
         <label class="text-sm font-medium text-gray-700">Name</label>
@@ -14,8 +14,17 @@
         <label class="text-sm font-medium text-gray-700">Description</label>
         <textarea name="description" class="border border-gray-300 rounded-md px-3 py-2 text-sm">{{ service.description }}</textarea>
 
-        <label class="text-sm font-medium text-gray-700">Price (optional)</label>
+        <label class="text-sm font-medium text-gray-700">Cost Price (optional)</label>
+        <input name="cost_price" type="number" step="0.01" value="{% if service.cost_price %}{{ service.cost_price }}{% endif %}" class="border border-gray-300 rounded-md px-3 py-2 text-sm" />
+
+        <label class="text-sm font-medium text-gray-700">Sales Price (optional)</label>
         <input name="price" type="number" step="0.01" value="{% if service.price %}{{ service.price }}{% endif %}" class="border border-gray-300 rounded-md px-3 py-2 text-sm" />
+
+        <label class="text-sm font-medium text-gray-700">Image (optional)</label>
+        {% if service.image %}
+          <div class="mb-2"><img src="{{ service.image.url }}" alt="{{ service.name }}" class="w-32 h-20 object-cover rounded-md"/></div>
+        {% endif %}
+        <input name="image" type="file" accept="image/*" class="text-sm" />
 
         <label class="flex items-center gap-2">
           <input type="checkbox" name="is_active" {% if service.is_active %}checked{% endif %} /> <span class="text-sm text-gray-700">Active</span>

@@ -789,6 +789,21 @@ class Purchase(models.Model):
         
     def get_total_quantity(self):
         return sum(item.quantity for item in self.items.all())
+    
+    def calculate_totals(self):
+        """Calculate and update subtotal and total_amount based on items"""
+        # Calculate subtotal from all purchase items
+        self.subtotal = sum(item.get_total() for item in self.items.all()) or Decimal('0.00')
+        
+        # Ensure tax_amount and discount are Decimal
+        tax = Decimal(str(self.tax_amount or 0))
+        discount = Decimal(str(self.discount or 0))
+        
+        # Calculate total: subtotal + tax - discount
+        self.total_amount = self.subtotal + tax - discount
+        
+        # Save the calculated totals
+        self.save(update_fields=['subtotal', 'total_amount'])
 
 
 class PurchaseItem(models.Model):
@@ -882,6 +897,7 @@ class PurchaseInvoice(models.Model):
         ('overdue', 'Overdue'),
     ]
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='pending')
+    paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     payment_date = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
     
@@ -899,6 +915,13 @@ class PurchaseInvoice(models.Model):
     
     def __str__(self):
         return f"Purchase Invoice {self.invoice_number} - {self.supplier_name}"
+
+    @property
+    def outstanding_amount(self):
+        try:
+            return (self.total_amount - (self.paid_amount or Decimal('0.00')))
+        except Exception:
+            return self.total_amount
 
 
 class PurchaseInvoiceItem(models.Model):
@@ -1009,58 +1032,7 @@ def ensure_order_items_snapshots(sender, instance, created, **kwargs):
 
 
 
-@receiver(post_save, sender=Purchase)
-def create_purchase_invoice(sender, instance, created, **kwargs):
-    """
-    Automatically create a purchase invoice when a purchase is created or updated with items.
-    Stores snapshot of supplier and product details.
-    """
-    # Check if invoice already exists
-    if hasattr(instance, 'invoice'):
-        return
     
-    # Only create invoice if purchase has items
-    if not instance.items.exists():
-        return
-    
-    # Capture supplier details snapshot
-    supplier_name = instance.supplier.name if instance.supplier else 'Unknown Supplier'
-    supplier_email = instance.supplier.email if instance.supplier else ''
-    supplier_phone = instance.supplier.phone if instance.supplier else ''
-    supplier_address = instance.supplier.address if instance.supplier else ''
-    supplier_city = instance.supplier.city if instance.supplier else ''
-    
-    # Create invoice with totals from purchase
-    invoice = PurchaseInvoice.objects.create(
-        purchase=instance,
-        supplier_name=supplier_name,
-        supplier_email=supplier_email,
-        supplier_phone=supplier_phone,
-        supplier_address=supplier_address,
-        supplier_city=supplier_city,
-        subtotal=instance.subtotal,
-        tax_amount=instance.tax_amount,
-        discount=instance.discount,
-        total_amount=instance.total_amount,
-        purchase_date=instance.purchase_date,
-        supplier_invoice_number=instance.supplier_invoice_number,
-        purchase_order_number=instance.purchase_order_number,
-        notes=instance.notes,
-        payment_status='pending',
-    )
-    
-    # Create invoice items from purchase items
-    for item in instance.items.all():
-        PurchaseInvoiceItem.objects.create(
-            invoice=invoice,
-            product_name=item.product_name,
-            product_sku=item.product_sku or '',
-            product_image=item.product_image,  # Copy image if available
-            quantity=item.quantity,
-            unit_price=item.purchase_price,
-            total=item.get_total(),
-        )
-        
             
             
         
@@ -1092,11 +1064,30 @@ class Service(models.Model):
     name = models.CharField(max_length=150)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    cost_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Cost price for this service')
+    image = models.ImageField(upload_to='services/', blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
+
+    def discount_percentage(self):
+        """Return discount percentage between cost_price and sale price.
+
+        Formula: ((cost_price - price) / cost_price) * 100
+        Returns Decimal with 2 decimal places or None if not applicable.
+        """
+        try:
+            if not self.cost_price or not self.price:
+                return None
+            if self.cost_price <= 0:
+                return None
+            pct = (Decimal(self.cost_price) - Decimal(self.price)) / Decimal(self.cost_price) * Decimal('100')
+            # allow negative result if markup; keep value
+            return pct.quantize(Decimal('0.01'))
+        except Exception:
+            return None
 
 
 class ServiceBooking(models.Model):

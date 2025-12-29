@@ -127,6 +127,7 @@ urlpatterns = [
     path('sales/<int:pk>/delete/', views.admin_sales_delete, name='admin_sales_delete'),
     path('sales/customers/', views.admin_sales_customers, name='admin_sales_customers'),
     path('sales/customer/<int:pk>/', views.admin_sales_customer_detail, name='admin_sales_customer_detail'),
+    path('sales/payment/update/', views.admin_sales_payment_update, name='admin_sales_payment_update'),
     path('sales/customer/<int:pk>/payment/', views.admin_sales_customer_payment, name='admin_sales_customer_payment'),
     path('sales/<int:pk>/payment/', views.admin_sales_detail_payment, name='admin_sales_detail_payment'),
     

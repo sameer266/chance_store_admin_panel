@@ -1,11 +1,13 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.db import transaction, IntegrityError
-from django.db.models import Q, Sum, F, Count, Max, Exists, OuterRef, DecimalField
+from django.db.models import Q, Sum, F, Count, Max, Exists, OuterRef, DecimalField, Value, ExpressionWrapper
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from decimal import Decimal
 from django.conf import settings
 import json
+import datetime
 
 from datetime import timedelta
 from django.db.models.functions import TruncDate
@@ -57,29 +59,77 @@ def _create_product_from_purchase_item(name, sku, purchase_price, selling_price,
         product.save(update_fields=['main_image'])
     
     return product, True
-
-def _ensure_purchase_invoice(purchase):
-    """Create a PurchaseInvoice for the given purchase if one doesn't exist.
-
-    This mirrors the logic in the post_save signal but is called explicitly
-    in the admin view to make invoice creation deterministic for bulk flows.
+def ensure_purchase_invoice(purchase):
     """
+    Ensure a purchase has an invoice with all its items.
+    Call this AFTER all PurchaseItems have been saved.
+    
+    Args:
+        purchase: Purchase instance
+    
+    Returns:
+        PurchaseInvoice instance
+    """
+    from decimal import Decimal
+    
+    # Check if invoice already exists
+    if hasattr(purchase, 'invoice'):
+        invoice = purchase.invoice
+        print(f"DEBUG: Invoice already exists for purchase {purchase.id}")
+        
+        # Check if invoice items match purchase items
+        invoice_item_count = invoice.items.count()
+        purchase_item_count = purchase.items.count()
+        
+        if invoice_item_count < purchase_item_count:
+            print(f"DEBUG: Invoice has {invoice_item_count} items but purchase has {purchase_item_count} items")
+            print(f"DEBUG: Adding missing items to invoice")
+            
+            # Get existing invoice item product names to avoid duplicates
+            existing_items = set(invoice.items.values_list('product_name', flat=True))
+            
+            # Add missing items
+            added_count = 0
+            for purchase_item in purchase.items.all():
+                if purchase_item.product_name not in existing_items:
+                    PurchaseInvoiceItem.objects.create(
+                        invoice=invoice,
+                        product_name=purchase_item.product_name,
+                        product_sku=purchase_item.product_sku or '',
+                        product_image=purchase_item.product_image,
+                        quantity=purchase_item.quantity,
+                        unit_price=purchase_item.purchase_price,
+                        total=purchase_item.get_total(),
+                    )
+                    added_count += 1
+            
+            print(f"DEBUG: Added {added_count} missing items to invoice")
+            
+            # Update invoice totals
+            invoice.subtotal = purchase.subtotal
+            invoice.tax_amount = purchase.tax_amount
+            invoice.discount = purchase.discount
+            invoice.total_amount = purchase.total_amount
+            invoice.save()
+        
+        return invoice
+    
+    # Only create invoice if purchase has items
+    if not purchase.items.exists():
+        print(f"DEBUG: Purchase {purchase.id} has no items, cannot create invoice")
+        return None
+    
+    print(f"DEBUG: Creating new invoice for purchase {purchase.id} with {purchase.items.count()} items")
+    
     try:
-        # If an invoice already exists, nothing to do
-        if hasattr(purchase, 'invoice'):
-            return purchase.invoice
-
-        # only create invoice when purchase has items
-        if not purchase.items.exists():
-            return None
-
-        supplier = purchase.supplier
-        supplier_name = supplier.name if supplier else 'Unknown Supplier'
-        supplier_email = supplier.email if supplier else ''
-        supplier_phone = supplier.phone if supplier else ''
-        supplier_address = supplier.address if supplier else ''
-        supplier_city = supplier.city if supplier else ''
-
+        # Capture supplier details snapshot
+        supplier_name = purchase.supplier.name if purchase.supplier else 'Unknown Supplier'
+        supplier_email = purchase.supplier.email if purchase.supplier else ''
+        supplier_phone = purchase.supplier.phone if purchase.supplier else ''
+        supplier_address = purchase.supplier.address if purchase.supplier else ''
+        supplier_city = purchase.supplier.city if purchase.supplier else ''
+        
+        # Create invoice with totals from purchase
         invoice = PurchaseInvoice.objects.create(
             purchase=purchase,
             supplier_name=supplier_name,
@@ -88,8 +138,8 @@ def _ensure_purchase_invoice(purchase):
             supplier_address=supplier_address,
             supplier_city=supplier_city,
             subtotal=purchase.subtotal,
-            tax_amount=purchase.tax_amount if hasattr(purchase, 'tax_amount') else purchase.tax_amount,
-            discount=purchase.discount if hasattr(purchase, 'discount') else purchase.discount,
+            tax_amount=purchase.tax_amount,
+            discount=purchase.discount,
             total_amount=purchase.total_amount,
             purchase_date=purchase.purchase_date,
             supplier_invoice_number=purchase.supplier_invoice_number,
@@ -97,22 +147,29 @@ def _ensure_purchase_invoice(purchase):
             notes=purchase.notes,
             payment_status='pending',
         )
-
-        # Create invoice items – snapshot current purchase items
-        for item in purchase.items.all():
+        
+        # Create invoice items from ALL purchase items
+        items_created = 0
+        for purchase_item in purchase.items.all():
             PurchaseInvoiceItem.objects.create(
                 invoice=invoice,
-                product_name=item.product_name,
-                product_sku=item.product_sku or '',
-                product_image=item.product_image,
-                quantity=item.quantity,
-                unit_price=item.purchase_price,
-                total=item.get_total(),
+                product_name=purchase_item.product_name,
+                product_sku=purchase_item.product_sku or '',
+                product_image=purchase_item.product_image,
+                quantity=purchase_item.quantity,
+                unit_price=purchase_item.purchase_price,
+                total=purchase_item.get_total(),
             )
-
+            items_created += 1
+        
+        print(f"DEBUG: Created invoice {invoice.invoice_number} with {items_created} items")
         return invoice
-    except Exception:
-        # best-effort mask errors; the signal already attempts the same operation
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"ERROR creating purchase invoice: {e}")
+        print(error_trace)
         return None
 
 
@@ -216,12 +273,19 @@ def admin_service_add(request):
         name = request.POST.get('name')
         description = request.POST.get('description', '')
         price = request.POST.get('price') or None
+        cost_price = request.POST.get('cost_price') or None
+        image = request.FILES.get('image') if request.FILES else None
         is_active = True if request.POST.get('is_active') == 'on' else False
         try:
             price_val = Decimal(price) if price else None
+            cost_price_val = Decimal(cost_price) if cost_price else None
         except Exception:
             price_val = None
-        Service.objects.create(name=name, description=description, price=price_val, is_active=is_active)
+            cost_price_val = None
+        service = Service.objects.create(name=name, description=description, price=price_val, is_active=is_active, cost_price=cost_price_val)
+        if image:
+            service.image = image
+            service.save(update_fields=['image'])
         messages.success(request, 'Service added')
         return redirect('admin_services_list')
     return render(request, 'dashboard/pages/services/add_service.html')
@@ -234,11 +298,19 @@ def admin_service_update(request, pk):
         service.name = request.POST.get('name')
         service.description = request.POST.get('description', '')
         price = request.POST.get('price') or None
+        cost_price = request.POST.get('cost_price') or None
+        image = request.FILES.get('image') if request.FILES else None
         try:
             service.price = Decimal(price) if price else None
         except Exception:
             service.price = None
+        try:
+            service.cost_price = Decimal(cost_price) if cost_price else None
+        except Exception:
+            service.cost_price = None
         service.is_active = True if request.POST.get('is_active') == 'on' else False
+        if image:
+            service.image = image
         service.save()
         messages.success(request, 'Service updated')
         return redirect('admin_services_list')
@@ -1465,16 +1537,26 @@ def admin_suppliers_list(request):
     search = request.GET.get('search', '')
     suppliers = Supplier.objects.all().order_by('name')
     total_suppliers = suppliers.count()
-    total_amount_outstanding = 0
-    purchase=Purchase.objects.all()
-    for sup in suppliers:
-        outstanding = purchase.filter(supplier=sup).aggregate(
-            total_outstanding=Sum(
-                'invoice__total_amount',
-                filter=Q(invoice__payment_status__in=['pending', 'partial', 'overdue'])
+    # Compute total outstanding across all invoices as (total_amount - paid_amount)
+    try:
+        total_out_agg = PurchaseInvoice.objects.filter(
+            payment_status__in=['pending', 'partial', 'overdue']
+        ).aggregate(
+            total_outstanding=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F('total_amount') - Coalesce(F('paid_amount'), Value(Decimal('0.00'))),
+                        output_field=DecimalField(max_digits=14, decimal_places=2)
+                    ),
+                    output_field=DecimalField(max_digits=14, decimal_places=2)
+                ),
+                Value(Decimal('0.00')),
+                output_field=DecimalField(max_digits=14, decimal_places=2)
             )
-        )['total_outstanding'] or 0
-        total_amount_outstanding += outstanding
+        )
+        total_amount_outstanding = total_out_agg.get('total_outstanding') or Decimal('0.00')
+    except Exception:
+        total_amount_outstanding = Decimal('0.00')
     
     if search:
         suppliers = suppliers.filter(
@@ -1484,15 +1566,30 @@ def admin_suppliers_list(request):
             Q(phone__icontains=search)
         )
 
+    # outstanding_amount should consider partial payments (total_amount - paid_amount)
+    outstanding_expr = ExpressionWrapper(
+        F('purchases__invoice__total_amount') - Coalesce(F('purchases__invoice__paid_amount'), Value(Decimal('0.00'))),
+        output_field=DecimalField(max_digits=12, decimal_places=2)
+    )
+
     suppliers = suppliers.annotate(
-        outstanding_amount=Sum(
-            'purchases__invoice__total_amount',
-            filter=Q(purchases__invoice__payment_status__in=['pending', 'partial', 'overdue']),
+        outstanding_amount=Coalesce(
+            Sum(
+                outstanding_expr,
+                filter=Q(purchases__invoice__payment_status__in=['pending', 'partial', 'overdue']),
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            ),
+            Value(Decimal('0.00')),
             output_field=DecimalField(max_digits=12, decimal_places=2)
         ),
-        paid_amount=Sum(
-            'purchases__invoice__total_amount',
-            filter=Q(purchases__invoice__payment_status='paid'),
+        paid_amount=Coalesce(
+            Sum(
+                'purchases__invoice__paid_amount',
+                filter=Q(purchases__invoice__paid_amount__gt=0)
+            ,
+                output_field=DecimalField(max_digits=12, decimal_places=2)
+            ),
+            Value(Decimal('0.00')),
             output_field=DecimalField(max_digits=12, decimal_places=2)
         ),
         purchase_count=Count('purchases', distinct=True),
@@ -1590,21 +1687,21 @@ def admin_supplier_payments_update(request):
                     messages.error(request, 'Invoice not found')
                     return redirect(request.META.get('HTTP_REFERER'))
                 
-                # Check if payment exceeds outstanding
-                outstanding = invoice.total_amount
+                # Compute outstanding considering already paid amount
+                outstanding = invoice.total_amount - (invoice.paid_amount or Decimal('0.00'))
+                # If paying more than outstanding, warn but only apply up to outstanding
                 if amount > outstanding:
                     messages.warning(request, f'Payment amount exceeds outstanding balance of Rs. {outstanding}')
-                
-                # Update payment status
-                paid_so_far = invoice.total_amount - outstanding
-                new_paid_amount = paid_so_far + amount
-                
-                if new_paid_amount >= invoice.total_amount:
+
+                payment_to_apply = min(amount, outstanding)
+                invoice.paid_amount = (invoice.paid_amount or Decimal('0.00')) + payment_to_apply
+
+                if invoice.paid_amount >= invoice.total_amount:
                     invoice.payment_status = 'paid'
                     invoice.payment_date = timezone.now().date()
                 else:
                     invoice.payment_status = 'partial'
-                
+
                 invoice.save()
                 messages.success(request, 'Payment recorded successfully')
             else:
@@ -1619,23 +1716,25 @@ def admin_supplier_payments_update(request):
                     return redirect(request.META.get('HTTP_REFERER'))
                 
                 remaining_payment = amount
-                
+
                 for invoice in invoices:
                     if remaining_payment <= 0:
                         break
-                    
-                    outstanding = invoice.total_amount
+
+                    outstanding = invoice.total_amount - (invoice.paid_amount or Decimal('0.00'))
+                    if outstanding <= 0:
+                        continue
+
                     payment_for_this_invoice = min(remaining_payment, outstanding)
-                    
-                    paid_so_far = invoice.total_amount - outstanding
-                    new_paid_amount = paid_so_far + payment_for_this_invoice
-                    
-                    if new_paid_amount >= invoice.total_amount:
+
+                    invoice.paid_amount = (invoice.paid_amount or Decimal('0.00')) + payment_for_this_invoice
+
+                    if invoice.paid_amount >= invoice.total_amount:
                         invoice.payment_status = 'paid'
                         invoice.payment_date = timezone.now().date()
                     else:
                         invoice.payment_status = 'partial'
-                    
+
                     invoice.save()
                     remaining_payment -= payment_for_this_invoice
                 
@@ -1698,10 +1797,12 @@ def admin_supplier_detail(request, pk):
     paid_amount = Decimal('0')
 
     for invoice in invoices:
-        if invoice.payment_status in ['pending', 'partial', 'overdue']:
-            outstanding_amount += invoice.total_amount
-        elif invoice.payment_status == 'paid':
-            paid_amount += invoice.total_amount
+        paid = invoice.paid_amount or Decimal('0')
+        paid_amount += paid
+        # outstanding is total minus paid (never negative)
+        outstanding = invoice.total_amount - paid
+        if outstanding > 0 and invoice.payment_status in ['pending', 'partial', 'overdue']:
+            outstanding_amount += outstanding
 
     context = {
         'supplier': supplier,
@@ -1783,6 +1884,7 @@ def admin_purchases_list(request):
     })
 
 
+
 @admin_required
 def admin_purchase_add(request):
     categories = Category.objects.filter(is_active=True).order_by('name')
@@ -1799,6 +1901,11 @@ def admin_purchase_add(request):
             
             # Get purchase details
             purchase_date = request.POST.get('purchase_date', timezone.now().date())
+            if isinstance(purchase_date, str):
+                try:
+                    purchase_date = datetime.datetime.strptime(purchase_date, '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    purchase_date = timezone.now().date()
             notes = request.POST.get('notes', '')
             tax_amount = Decimal(request.POST.get('tax_amount', 0))
             discount = Decimal(request.POST.get('discount', 0))
@@ -1811,7 +1918,12 @@ def admin_purchase_add(request):
             selling_prices = request.POST.getlist('selling_price[]')
             estimated_days_list = request.POST.getlist('estimated_days[]')
             quantities = request.POST.getlist('quantity[]')
-            product_images = request.FILES.getlist('product_image[]')
+            
+            # Debug logging
+            print(f"DEBUG: Received {len(product_names)} product names")
+            print(f"DEBUG: Received {len(request.FILES)} files")
+            for key in request.FILES.keys():
+                print(f"DEBUG: File key: {key}")
             
             # Basic validation
             if not product_names:
@@ -1834,9 +1946,11 @@ def admin_purchase_add(request):
                 auto_created_products = 0
                 updated_products = 0
                 
+                # Process each product
                 for i in range(len(product_names)):
                     product_name = product_names[i].strip()
                     if not product_name:
+                        print(f"DEBUG: Skipping empty product at index {i}")
                         continue
                     
                     category_id = product_categories[i] if i < len(product_categories) else ''
@@ -1845,10 +1959,13 @@ def admin_purchase_add(request):
                     selling_price = Decimal(selling_prices[i]) if i < len(selling_prices) else Decimal('0')
                     estimated_days = estimated_days_list[i].strip() if i < len(estimated_days_list) else ''
                     quantity = int(quantities[i]) if i < len(quantities) else 1
-                    product_image = product_images[i] if i < len(product_images) and product_images[i] else None
+                    
+                    # Get the image for this specific item using the index
+                    product_image = request.FILES.get(f'product_image[{i}]', None)
                     
                     # Skip invalid entries
                     if purchase_price <= 0 or selling_price <= 0 or quantity <= 0:
+                        print(f"DEBUG: Skipping invalid product at index {i}: price={purchase_price}, qty={quantity}")
                         continue
                     
                     # Get or create product
@@ -1858,7 +1975,6 @@ def admin_purchase_add(request):
                     if product_id:
                         try:
                             product = Product.objects.get(pk=product_id)
-                            # Update existing product with new data
                             product.cost_price = purchase_price
                             product.price = selling_price
                             if estimated_days:
@@ -1882,10 +1998,6 @@ def admin_purchase_add(request):
                             category_id=category_id
                         )
                         auto_created_products += 1
-                        
-                        # Reset file pointer for reuse
-                        if product_image and hasattr(product_image, 'seek'):
-                            product_image.seek(0)
                     
                     # Create purchase item
                     purchase_item = PurchaseItem(
@@ -1897,17 +2009,22 @@ def admin_purchase_add(request):
                         quantity=quantity,
                     )
                     
+                    # Save the product image to purchase item if provided
                     if product_image:
                         purchase_item.product_image = product_image
                     
                     purchase_item.save()
                     
-                    # Update stock for existing products
-                    if product and not product_created:
-                        product.stock += quantity
-                        product.save(update_fields=['stock'])
+                    # Update stock
+                    if product:
+                        if product_created:
+                            product.save(update_fields=['stock'])
+                        else:
+                            product.stock += quantity
+                            product.save(update_fields=['stock'])
                     
                     items_added += 1
+                    print(f"DEBUG: Added item {i+1}: {product_name}, Qty: {quantity}, Price: {purchase_price}")
                 
                 if items_added == 0:
                     raise ValueError('No valid products were added.')
@@ -1916,23 +2033,37 @@ def admin_purchase_add(request):
                 purchase.calculate_totals()
                 purchase.refresh_from_db()
                 
-                # Ensure a single invoice exists for this purchase
-                if not hasattr(purchase, 'invoice') and purchase.items.exists():
-                    _ensure_purchase_invoice(purchase)
+                # Verify items were created
+                created_items_count = purchase.items.count()
+                print(f"DEBUG: Total items in database: {created_items_count}")
+                
+                # ✅ CRITICAL FIX: Create invoice AFTER all items are saved
+                # This ensures all PurchaseItems exist before creating PurchaseInvoiceItems
+                invoice = ensure_purchase_invoice(purchase)
+                
+                if invoice:
+                    invoice_items_count = invoice.items.count()
+                    print(f"DEBUG: Invoice created with {invoice_items_count} items")
+                else:
+                    print(f"WARNING: Failed to create invoice for purchase {purchase.id}")
             
             # Success message
             message = f'Purchase order created successfully with {items_added} item(s).'
             if auto_created_products > 0:
                 message += f' {auto_created_products} new product(s) created.'
             if updated_products > 0:
-                message += f' {updated_products} existing product(s) updated with new cost price, selling price, and ETA.'
+                message += f' {updated_products} existing product(s) updated.'
             messages.success(request, message)
             
             return redirect('admin_purchases_list')
             
-        except ValueError:
-            pass  # Error message already set
+        except ValueError as e:
+            print(f"ValueError in admin_purchase_add: {str(e)}")
+            pass
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f'ERROR in admin_purchase_add: {str(e)}\n{error_trace}')
             messages.error(request, f'Error creating purchase: {str(e)}')
     
     # Render form
@@ -1946,7 +2077,6 @@ def admin_purchase_add(request):
         'categories': categories,
         'selected_supplier_id': selected_supplier_id,
     })
-
 
 @admin_required
 def admin_purchase_update(request, pk):
@@ -2140,26 +2270,38 @@ def api_update_purchase_invoice_payment_status(request, invoice_number):
 
 @admin_required
 def admin_sales_list(request):
-    """Display list of all sales"""
+    """List all sales with filtering"""
+    sales = Sale.objects.select_related('customer').all()
+    
+    # Filtering
     search = request.GET.get('search', '')
     status = request.GET.get('status', '')
     
-    sales = Sale.objects.all().select_related('customer').order_by('-created_at')
-    
     if search:
         sales = sales.filter(
-            Q(invoice_number__icontains=search) | 
-            Q(customer__name__icontains=search)
+            Q(invoice_number__icontains=search) |
+            Q(customer__name__icontains=search) |
+            Q(customer__email__icontains=search) |
+            Q(customer__phone__icontains=search)
         )
     
-    if status in ['paid', 'partially_paid', 'unpaid']:
+    if status:
         sales = sales.filter(payment_status=status)
+    
+    # Calculate summary statistics
+    from django.db.models import Sum
+    
+    total_sales_amount = sales.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+    total_outstanding = sales.aggregate(total=Sum('outstanding_amount'))['total'] or Decimal('0.00')
+    total_paid = sales.aggregate(total=Sum('paid_amount'))['total'] or Decimal('0.00')
     
     context = {
         'sales': sales,
+        'total_sales_amount': total_sales_amount,
+        'total_outstanding': total_outstanding,
+        'total_paid': total_paid,
     }
     return render(request, 'dashboard/pages/sales/sales_list.html', context)
-
 
 @admin_required
 def admin_sales_add(request):
@@ -2172,12 +2314,19 @@ def admin_sales_add(request):
                 # Get or create customer
                 if customer_type == 'existing':
                     customer_id = request.POST.get('customer')
+                    if not customer_id:
+                        messages.error(request, 'Please select a customer')
+                        return redirect('admin_sales_add')
                     customer = get_object_or_404(SaleCustomer, id=customer_id)
                 else:
-                    customer_name = request.POST.get('new_customer_name')
-                    customer_email = request.POST.get('new_customer_email', '')
-                    customer_phone = request.POST.get('new_customer_phone', '')
-                    customer_address = request.POST.get('new_customer_address', '')
+                    customer_name = request.POST.get('new_customer_name', '').strip()
+                    if not customer_name:
+                        messages.error(request, 'Customer name is required')
+                        return redirect('admin_sales_add')
+                    
+                    customer_email = request.POST.get('new_customer_email', '').strip()
+                    customer_phone = request.POST.get('new_customer_phone', '').strip()
+                    customer_address = request.POST.get('new_customer_address', '').strip()
                     
                     customer = SaleCustomer.objects.create(
                         name=customer_name,
@@ -2192,6 +2341,53 @@ def admin_sales_add(request):
                 payment_notes = request.POST.get('payment_notes', '')
                 notes = request.POST.get('notes', '')
                 
+                # Get product data from form
+                product_ids = request.POST.getlist('product_id')
+                quantities = request.POST.getlist('quantity')
+                unit_prices = request.POST.getlist('unit_price')
+                
+                # Validate that products are selected
+                if not product_ids:
+                    messages.error(request, 'Please add at least one product to the sale')
+                    return redirect('admin_sales_add')
+                
+                # First, validate stock availability for all products
+                stock_errors = []
+                products_to_process = []
+                
+                for prod_id, qty, price in zip(product_ids, quantities, unit_prices):
+                    try:
+                        product = get_object_or_404(Product, id=prod_id)
+                        quantity = int(qty)
+                        unit_price = Decimal(price)
+                        
+                        # Validate quantity
+                        if quantity <= 0:
+                            stock_errors.append(f'{product.name}: Quantity must be greater than 0')
+                            continue
+                        
+                        # Check stock availability
+                        if product.stock < quantity:
+                            stock_errors.append(
+                                f'{product.name}: Insufficient stock. Available: {product.stock}, Requested: {quantity}'
+                            )
+                            continue
+                        
+                        products_to_process.append({
+                            'product': product,
+                            'quantity': quantity,
+                            'unit_price': unit_price,
+                        })
+                        
+                    except (ValueError, TypeError):
+                        stock_errors.append(f'Invalid quantity or price for product ID {prod_id}')
+                
+                # If there are any stock errors, rollback and show errors
+                if stock_errors:
+                    for error in stock_errors:
+                        messages.error(request, error)
+                    return redirect('admin_sales_add')
+                
                 # Create sale
                 sale = Sale.objects.create(
                     customer=customer,
@@ -2201,41 +2397,43 @@ def admin_sales_add(request):
                     notes=notes or None,
                 )
                 
-                # Get product data from form
-                # Assuming form sends multiple product_id, quantity, unit_price
+                # Process products: create sale items and reduce stock
                 total_amount = Decimal('0.00')
                 
-                # Parse product items (they should be sent as arrays or repeated fields)
-                product_ids = request.POST.getlist('product_id')
-                quantities = request.POST.getlist('quantity')
-                unit_prices = request.POST.getlist('unit_price')
-                
-                for prod_id, qty, price in zip(product_ids, quantities, unit_prices):
-                    product = get_object_or_404(Product, id=prod_id)
-                    quantity = int(qty)
-                    unit_price = Decimal(price)
+                for item_data in products_to_process:
+                    product = item_data['product']
+                    quantity = item_data['quantity']
+                    unit_price = item_data['unit_price']
                     
-                    item = SaleItem.objects.create(
+                    # Create sale item
+                    sale_item = SaleItem.objects.create(
                         sale=sale,
                         product=product,
                         quantity=quantity,
                         unit_price=unit_price,
                     )
-                    total_amount += item.total_amount
+                    total_amount += sale_item.total_amount
+                    
+                    # Reduce stock
+                    product.stock -= quantity
+                    product.save(update_fields=['stock'])
                 
                 # Update sale with total amount and save
                 sale.total_amount = total_amount
                 sale.save()
                 
                 # Record initial payment if any
-                if paid_amount > 0:
+                if paid_amount > 0 and payment_method:
                     SalePayment.objects.create(
                         sale=sale,
                         amount=paid_amount,
-                        payment_method=payment_method or 'cash',
+                        payment_method=payment_method,
                     )
                 
-                messages.success(request, f'Sale #{sale.invoice_number} created successfully')
+                messages.success(
+                    request, 
+                    f'Sale #{sale.invoice_number} created successfully. Total: Rs. {total_amount:.2f}'
+                )
                 return redirect('admin_sales_list')
                 
             except Exception as e:
@@ -2373,6 +2571,69 @@ def admin_sales_customer_detail(request, pk):
         'stats': stats,
     }
     return render(request, 'dashboard/pages/sales/customer_detail.html', context)
+
+
+
+@admin_required
+def admin_sales_payment_update(request):
+    """Update sale payment - receive payment for outstanding amount"""
+    if request.method == 'POST':
+        with transaction.atomic():
+            try:
+                sale_id = request.POST.get('sale_id')
+                amount = Decimal(request.POST.get('amount', '0'))
+                payment_method = request.POST.get('payment_method', '')
+                notes = request.POST.get('notes', '')
+                
+                # Validate inputs
+                if not sale_id:
+                    messages.error(request, 'Sale ID is required')
+                    return redirect('admin_sales_list')
+                
+                if amount <= 0:
+                    messages.error(request, 'Payment amount must be greater than zero')
+                    return redirect('admin_sales_list')
+                
+                if not payment_method:
+                    messages.error(request, 'Payment method is required')
+                    return redirect('admin_sales_list')
+                
+                # Get the sale
+                sale = get_object_or_404(Sale, id=sale_id)
+                
+                # Validate payment amount doesn't exceed outstanding
+                if amount > sale.outstanding_amount:
+                    messages.error(
+                        request, 
+                        f'Payment amount (Rs. {amount}) cannot exceed outstanding amount (Rs. {sale.outstanding_amount})'
+                    )
+                    return redirect('admin_sales_list')
+                
+                # Create payment record
+                payment = SalePayment.objects.create(
+                    sale=sale,
+                    amount=amount,
+                    payment_method=payment_method,
+                    notes=notes or None,
+                )
+                
+                # Update sale paid amount
+                sale.paid_amount += amount
+                sale.save()  # This will auto-calculate outstanding_amount and payment_status
+                
+                messages.success(
+                    request, 
+                    f'Payment of Rs. {amount:.2f} received successfully for Invoice #{sale.invoice_number}'
+                )
+                
+            except ValueError as e:
+                messages.error(request, f'Invalid payment amount: {str(e)}')
+            except Exception as e:
+                messages.error(request, f'Error processing payment: {str(e)}')
+        
+        return redirect('admin_sales_list')
+    
+    return redirect('admin_sales_list')
 
 
 @admin_required

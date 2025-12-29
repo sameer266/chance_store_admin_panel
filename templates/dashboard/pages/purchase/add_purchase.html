@@ -534,6 +534,7 @@ $(document).ready(function() {
     formData.append('tax_amount', taxAmount.toFixed(2));
     formData.append('discount', $('#discountAmount').val());
 
+    // ✅ FIXED: Append products with indexed file names
     products.forEach((product, index) => {
       formData.append('product_id[]', product.productId || '');
       formData.append('product_name[]', product.name);
@@ -544,10 +545,14 @@ $(document).ready(function() {
       formData.append('estimated_days[]', product.eta);
       formData.append('product_sku[]', '');
       
+      // ✅ CRITICAL FIX: Use indexed naming to match backend expectation
       if (product.imageFile) {
-        formData.append('product_image[]', product.imageFile);
+        formData.append(`product_image[${index}]`, product.imageFile);
       }
     });
+
+    // Debug: Log what we're sending
+    console.log('Sending purchase with', products.length, 'products');
 
     $.ajax({
       url: "{% url 'admin_purchase_add' %}",
@@ -568,11 +573,12 @@ $(document).ready(function() {
         });
       },
       error: function(xhr) {
+        console.error('Error saving purchase:', xhr);
         $btn.prop('disabled', false).text('Save Purchase Order');
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to save. Try again.'
+          text: 'Failed to save. Check console for details.'
         });
       }
     });

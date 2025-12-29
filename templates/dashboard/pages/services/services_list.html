@@ -21,7 +21,10 @@
         <thead class="bg-gray-50 border-b border-gray-200">
           <tr>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Name</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Image</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Cost</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Price</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Discount</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Status</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-700 border-b">Created</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-700 border-b">Actions</th>
@@ -31,7 +34,16 @@
           {% for service in services %}
           <tr class="hover:bg-gray-50 border-b">
             <td class="px-4 py-3 text-sm font-medium text-gray-900">{{ service.name }}</td>
+            <td class="px-4 py-3 text-sm text-gray-900">
+              {% if service.image %}
+                <img src="{{ service.image.url }}" alt="{{ service.name }}" class="w-16 h-10 object-cover rounded-md" />
+              {% else %}
+                <span class="text-xs text-gray-400">-</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm text-gray-900">{% if service.cost_price %}Rs. {{ service.cost_price|floatformat:2 }}{% else %}-{% endif %}</td>
             <td class="px-4 py-3 text-sm text-gray-900">{% if service.price %}Rs. {{ service.price|floatformat:2 }}{% else %}-{% endif %}</td>
+            <td class="px-4 py-3 text-sm text-gray-900">{% if service.discount_percentage %}{% if service.discount_percentage|floatformat:2 %}{{ service.discount_percentage }}%{% else %}-{% endif %}{% else %}-{% endif %}</td>
             <td class="px-4 py-3 text-sm text-gray-900">{% if service.is_active %}<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Active</span>{% else %}<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Inactive</span>{% endif %}</td>
             <td class="px-4 py-3 text-sm text-gray-500">{{ service.created_at|date:"M d, Y" }}</td>
             <td class="px-4 py-3">
@@ -47,7 +59,7 @@
           </tr>
           {% empty %}
           <tr>
-            <td colspan="5" class="px-4 py-12 text-center">
+            <td colspan="8" class="px-4 py-12 text-center">
               <i class="fas fa-concierge-bell text-gray-400 text-4xl mb-2"></i>
               <p class="text-sm text-gray-500">No services found</p>
             </td>
