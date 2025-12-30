@@ -176,8 +176,15 @@
               <span class="text-gray-600">Subtotal:</span>
               <span class="font-medium text-gray-900" id="subtotal">Rs. 0.00</span>
             </div>
+            <div class="flex justify-between items-center text-sm">
+              <label for="taxPercentage" class="text-gray-600">Tax (%):</label>
+              <div class="flex items-center gap-2">
+                <input type="number" name="tax_percentage" id="taxPercentage" step="0.01" min="0" max="100" value="{{ tax_cost.tax|default:'0' }}" class="w-20 border border-gray-300 rounded-lg p-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-gray-900">
+                <span class="text-gray-600">%</span>
+              </div>
+            </div>
             <div class="flex justify-between text-sm">
-              <span class="text-gray-600">Tax (if any):</span>
+              <span class="text-gray-600">Tax Amount:</span>
               <span class="font-medium text-gray-900" id="taxAmount">Rs. 0.00</span>
             </div>
             <div class="border-t border-gray-200 pt-3 flex justify-between">
@@ -380,7 +387,9 @@ $(document).ready(function() {
       subtotal += quantity * price;
     });
 
-    const taxAmount = 0; // Can be calculated based on tax settings
+    // Get tax percentage from input
+    const taxPercentage = parseFloat($('#taxPercentage').val()) || 0;
+    const taxAmount = (subtotal * taxPercentage) / 100;
     const totalAmount = subtotal + taxAmount;
 
     $('#subtotal').text('Rs. ' + subtotal.toFixed(2));
@@ -399,8 +408,11 @@ $(document).ready(function() {
     $('#outstandingAmount').text('Rs. ' + outstanding.toFixed(2));
   }
 
+  // Update totals when tax percentage changes
+  $('#taxPercentage').on('change input', updateTotals);
+
   // Update outstanding on paid amount change
-  $('#paidAmount').on('change', calculateOutstanding);
+  $('#paidAmount').on('change input', calculateOutstanding);
 });
 </script>
 {% endblock %}

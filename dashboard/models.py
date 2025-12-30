@@ -757,11 +757,21 @@ class Purchase(models.Model):
     )
 
     purchase_date = models.DateField(default=timezone.now)
+    
+    # Manual bill number input by admin
+    bill_number = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text='Bill number from supplier (e.g., 0001, 0002, or custom like ABC-001)'
+    )
+    
     supplier_invoice_number = models.CharField(
         max_length=100,
         blank=True,
-        help_text='Supplier invoice number'
+        help_text='Auto-generated full invoice number'
     )
+    
     purchase_order_number = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
 
@@ -777,12 +787,33 @@ class Purchase(models.Model):
         ordering = ['-purchase_date', '-created_at']
 
     def save(self, *args, **kwargs):
-        # 🔹 If supplier invoice number is not provided
-        if not self.supplier_invoice_number:
+        """
+        Generate full supplier invoice number based on admin's bill number input.
+        Format: {SUPPLIER_CODE}-{DATE}-{BILL_NUMBER}
+        
+        Admin can input just the bill number (e.g., "0001" or "ABC-001"),
+        and the system will generate the full invoice number.
+        """
+        if self.supplier and self.bill_number:
+            today = timezone.now().strftime('%Y%m%d')
+            
+            # Get supplier code (first 3 letters of name)
+            supplier_code = ''.join(filter(str.isalpha, self.supplier.name[:3])).upper()
+            if not supplier_code:
+                supplier_code = 'SUP'
+            
+            # Clean the bill number (remove any extra spaces)
+            clean_bill_number = str(self.bill_number).strip()
+            
+            # Generate full invoice number
+            self.supplier_invoice_number = f"{supplier_code}-{today}-{clean_bill_number}"
+            
+    
+        elif not self.supplier_invoice_number:
+            # Fallback if no bill number provided
             today = timezone.now().strftime('%Y%m%d')
             last_purchase = Purchase.objects.order_by('-id').first()
             next_id = (last_purchase.id + 1) if last_purchase else 1
-
             self.supplier_invoice_number = f"SUP-INV-{today}-{next_id:04d}"
             
         super().save(*args, **kwargs)
@@ -804,6 +835,10 @@ class Purchase(models.Model):
         
         # Save the calculated totals
         self.save(update_fields=['subtotal', 'total_amount'])
+    
+    def __str__(self):
+        return f"Purchase {self.supplier_invoice_number} from {self.supplier.name if self.supplier else 'Unknown'}"
+
 
 
 class PurchaseItem(models.Model):
@@ -1169,6 +1204,11 @@ class Sale(models.Model):
     invoice_number = models.CharField(max_length=50, unique=True)
     sale_date = models.DateTimeField(auto_now_add=True)
     
+    # ADD THESE NEW FIELDS:
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Subtotal before tax')
+    tax_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text='Tax percentage applied')
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Calculated tax amount')
+    
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     outstanding_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -1208,7 +1248,6 @@ class Sale(models.Model):
             self.payment_status = 'unpaid'
         
         super().save(*args, **kwargs)
-
 
 class SaleItem(models.Model):
     """Individual items in a sale"""

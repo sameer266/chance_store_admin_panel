@@ -29,7 +29,7 @@
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label class="block text-sm font-medium text-gray-600">Customer Name</label>
-              <p class="text-gray-900 font-medium mt-1">{{ sale.customer.name|default:sale.customer_name }}</p>
+              <p class="text-gray-900 font-medium mt-1">{{ sale.customer.name | default: "-"}}</p>
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-600">Email</label>

@@ -1918,6 +1918,10 @@ def admin_purchase_add(request):
             selling_prices = request.POST.getlist('selling_price[]')
             estimated_days_list = request.POST.getlist('estimated_days[]')
             quantities = request.POST.getlist('quantity[]')
+            bill_number = request.POST.get('bill_number', '').strip()
+            if not bill_number:
+                messages.error(request, 'Bill number is required.')
+                raise ValueError('Bill number is required')
             
             # Debug logging
             print(f"DEBUG: Received {len(product_names)} product names")
@@ -1934,6 +1938,7 @@ def admin_purchase_add(request):
             with transaction.atomic():
                 purchase = Purchase.objects.create(
                     supplier=supplier,
+                    bill_number=bill_number,
                     purchase_date=purchase_date,
                     notes=notes,
                     tax_amount=tax_amount,
@@ -2303,7 +2308,8 @@ def admin_sales_list(request):
     }
     return render(request, 'dashboard/pages/sales/sales_list.html', context)
 
-@admin_required
+
+
 def admin_sales_add(request):
     """Create a new sale"""
     if request.method == 'POST':
@@ -2340,6 +2346,9 @@ def admin_sales_add(request):
                 payment_method = request.POST.get('payment_method', '')
                 payment_notes = request.POST.get('payment_notes', '')
                 notes = request.POST.get('notes', '')
+                
+                # Get tax percentage from form (user can edit it)
+                tax_percentage = Decimal(request.POST.get('tax_percentage', '0'))
                 
                 # Get product data from form
                 product_ids = request.POST.getlist('product_id')
@@ -2388,9 +2397,25 @@ def admin_sales_add(request):
                         messages.error(request, error)
                     return redirect('admin_sales_add')
                 
-                # Create sale
+                # Calculate subtotal
+                subtotal = Decimal('0.00')
+                for item_data in products_to_process:
+                    item_total = item_data['quantity'] * item_data['unit_price']
+                    subtotal += item_total
+                
+                # Calculate tax amount
+                tax_amount = (subtotal * tax_percentage / Decimal('100')).quantize(Decimal('0.01'))
+                
+                # Calculate total amount (subtotal + tax)
+                total_amount = subtotal + tax_amount
+                
+                # Create sale with tax fields
                 sale = Sale.objects.create(
                     customer=customer,
+                    subtotal=subtotal,
+                    tax_percentage=tax_percentage,
+                    tax_amount=tax_amount,
+                    total_amount=total_amount,
                     paid_amount=paid_amount,
                     payment_method=payment_method or None,
                     payment_notes=payment_notes or None,
@@ -2398,29 +2423,22 @@ def admin_sales_add(request):
                 )
                 
                 # Process products: create sale items and reduce stock
-                total_amount = Decimal('0.00')
-                
                 for item_data in products_to_process:
                     product = item_data['product']
                     quantity = item_data['quantity']
                     unit_price = item_data['unit_price']
                     
                     # Create sale item
-                    sale_item = SaleItem.objects.create(
+                    SaleItem.objects.create(
                         sale=sale,
                         product=product,
                         quantity=quantity,
                         unit_price=unit_price,
                     )
-                    total_amount += sale_item.total_amount
                     
                     # Reduce stock
                     product.stock -= quantity
                     product.save(update_fields=['stock'])
-                
-                # Update sale with total amount and save
-                sale.total_amount = total_amount
-                sale.save()
                 
                 # Record initial payment if any
                 if paid_amount > 0 and payment_method:
@@ -2432,7 +2450,9 @@ def admin_sales_add(request):
                 
                 messages.success(
                     request, 
-                    f'Sale #{sale.invoice_number} created successfully. Total: Rs. {total_amount:.2f}'
+                    f'Sale #{sale.invoice_number} created successfully. '
+                    f'Subtotal: Rs. {subtotal:.2f}, Tax ({tax_percentage}%): Rs. {tax_amount:.2f}, '
+                    f'Total: Rs. {total_amount:.2f}'
                 )
                 return redirect('admin_sales_list')
                 
@@ -2440,14 +2460,45 @@ def admin_sales_add(request):
                 messages.error(request, f'Error creating sale: {str(e)}')
                 return redirect('admin_sales_add')
     
+    # GET request - show the form
     customers = SaleCustomer.objects.all().order_by('name')
     products = Product.objects.filter(is_active=True).order_by('name')
+    
+    # Get default tax from TaxCost model
+    tax_cost = TaxCost.objects.first()
     
     context = {
         'customers': customers,
         'products': products,
+        'tax_cost': tax_cost,
     }
     return render(request, 'dashboard/pages/sales/add_sale.html', context)
+
+
+def admin_sales_detail(request, pk):
+    """View sale details"""
+    sale = get_object_or_404(Sale, id=pk)
+    payments = sale.payments.all()
+    
+    # Calculate subtotal and tax for display
+    # For new sales with tax fields, use stored values
+    # For old sales without tax fields, calculate from total
+    if hasattr(sale, 'subtotal') and sale.subtotal > 0:
+        subtotal = sale.subtotal
+        tax_amount = sale.tax_amount
+    else:
+        # For backward compatibility with old sales
+        # Assume total_amount is the subtotal (no tax)
+        subtotal = sale.total_amount
+        tax_amount = Decimal('0.00')
+    
+    context = {
+        'sale': sale,
+        'payments': payments,
+        'subtotal': subtotal,
+        'tax_amount': tax_amount,
+    }
+    return render(request, 'dashboard/pages/sales/sale_detail.html', context)
 
 
 @admin_required
@@ -2485,17 +2536,6 @@ def admin_sales_edit(request, pk):
     return render(request, 'dashboard/pages/sales/edit_sale.html', context)
 
 
-@admin_required
-def admin_sales_detail(request, pk):
-    """View sale details"""
-    sale = get_object_or_404(Sale, id=pk)
-    payments = sale.payments.all()
-    
-    context = {
-        'sale': sale,
-        'payments': payments,
-    }
-    return render(request, 'dashboard/pages/sales/sale_detail.html', context)
 
 
 @admin_required

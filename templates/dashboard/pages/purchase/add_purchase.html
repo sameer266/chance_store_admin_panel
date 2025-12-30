@@ -31,16 +31,43 @@
           {% endfor %}
         </select>
       </div>
+
+      <!-- Bill Number Field -->
+      <div>
+        <label class="block text-xs font-medium text-gray-700 mb-1.5">
+          Bill Number <span class="text-red-500">*</span>
+        </label>
+        <div class="flex gap-2">
+          <input 
+            type="text" 
+            id="billNumber" 
+            class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" 
+            placeholder="e.g., 0001"
+            required>
+          <button 
+            type="button" 
+            id="suggestBillBtn" 
+            class="px-3 py-2 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 transition-colors whitespace-nowrap"
+            title="Suggest next bill number">
+            <i class="fas fa-magic"></i>
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-1" id="billNumberHint">
+          Select supplier to see suggested bill number
+        </p>
+      </div>
+      
       <div>
         <label class="block text-xs font-medium text-gray-700 mb-1.5">
           Purchase Date <span class="text-red-500">*</span>
         </label>
         <input type="date" id="purchaseDate" value="{% now 'Y-m-d' %}" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" required>
       </div>
-      <div>
-        <label class="block text-xs font-medium text-gray-700 mb-1.5">Notes</label>
-        <input type="text" id="notes" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="Optional">
-      </div>
+    </div>
+    
+    <div class="mt-4">
+      <label class="block text-xs font-medium text-gray-700 mb-1.5">Notes</label>
+      <input type="text" id="notes" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="Optional notes">
     </div>
   </div>
 
@@ -110,9 +137,9 @@
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1.5">
-            ETA (days) <span class="text-red-500">*</span>
+            ETA (days) 
           </label>
-          <input type="text" required  id="productETA" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="e.g., 2-4 days">
+          <input type="text" id="productETA" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="e.g., 2-4 days">
         </div>
         <div>
           <label class="block text-xs font-medium text-gray-700 mb-1.5">
@@ -239,6 +266,7 @@ $(document).ready(function() {
     });
   }
 
+  // Image preview handling
   $('#productImage').on('change', function() {
     const file = this.files[0];
     if (file) {
@@ -256,6 +284,7 @@ $(document).ready(function() {
     $('#imagePreview').addClass('hidden');
   });
 
+  // Auto-fill product details when selected
   $('#productSelect').on('change', function() {
     const $option = $(this).find('option:selected');
     if ($option.val()) {
@@ -274,6 +303,7 @@ $(document).ready(function() {
     }
   });
 
+  // Add/Update product
   $('#addProductBtn').on('click', function() {
     const productId = $('#productSelect').val();
     const name = $('#productName').val().trim();
@@ -286,6 +316,7 @@ $(document).ready(function() {
     const imageFile = $('#productImage')[0].files[0];
     const existingImage = $('#previewImg').attr('src');
 
+    // Validation
     if (!name) {
       showToast('Enter product name', 'error');
       $('#productName').focus();
@@ -347,6 +378,7 @@ $(document).ready(function() {
     calculateTotals();
   });
 
+  // Render products table
   function renderTable() {
     const $tbody = $('#productsTableBody');
     $tbody.empty();
@@ -398,6 +430,7 @@ $(document).ready(function() {
     });
   }
 
+  // Edit product
   $(document).on('click', '.edit-btn', function() {
     const index = $(this).data('index');
     const product = products[index];
@@ -420,6 +453,7 @@ $(document).ready(function() {
     showToast('Editing mode', 'info');
   });
 
+  // Remove product
   $(document).on('click', '.remove-btn', function() {
     const index = $(this).data('index');
     const product = products[index];
@@ -443,6 +477,7 @@ $(document).ready(function() {
     });
   });
 
+  // Clear all products
   $('#clearAllBtn').on('click', function() {
     Swal.fire({
       title: 'Clear All?',
@@ -463,6 +498,7 @@ $(document).ready(function() {
     });
   });
 
+  // Reset form
   function resetForm() {
     $('#productSelect').val('');
     $('#productName').val('');
@@ -478,6 +514,7 @@ $(document).ready(function() {
     $('#editMode').addClass('hidden');
   }
 
+  // Calculate totals
   function calculateTotals() {
     let subtotal = 0;
     products.forEach(p => subtotal += p.total);
@@ -495,14 +532,24 @@ $(document).ready(function() {
 
   $('#taxPercent, #discountAmount').on('input', calculateTotals);
 
+  // ✅ FIXED: Save purchase order with bill_number
   $('#savePurchaseBtn').on('click', function() {
     const $btn = $(this);
     
+    // Validation
     if (!$('#supplierId').val()) {
       showToast('Select supplier', 'error');
       $('#supplierId').focus();
       return;
     }
+    
+    // ✅ Validate bill number
+    if (!$('#billNumber').val().trim()) {
+      showToast('Enter bill number', 'error');
+      $('#billNumber').focus();
+      return;
+    }
+    
     if (!$('#purchaseDate').val()) {
       showToast('Select date', 'error');
       $('#purchaseDate').focus();
@@ -527,6 +574,9 @@ $(document).ready(function() {
     formData.append('purchase_date', $('#purchaseDate').val());
     formData.append('notes', $('#notes').val());
     
+    // ✅ CRITICAL FIX: Add bill_number
+    formData.append('bill_number', $('#billNumber').val().trim());
+    
     const subtotal = products.reduce((sum, p) => sum + p.total, 0);
     const taxPercent = parseFloat($('#taxPercent').val()) || 0;
     const taxAmount = (subtotal * taxPercent) / 100;
@@ -534,7 +584,7 @@ $(document).ready(function() {
     formData.append('tax_amount', taxAmount.toFixed(2));
     formData.append('discount', $('#discountAmount').val());
 
-    // ✅ FIXED: Append products with indexed file names
+    // Append products with indexed file names
     products.forEach((product, index) => {
       formData.append('product_id[]', product.productId || '');
       formData.append('product_name[]', product.name);
@@ -545,14 +595,16 @@ $(document).ready(function() {
       formData.append('estimated_days[]', product.eta);
       formData.append('product_sku[]', '');
       
-      // ✅ CRITICAL FIX: Use indexed naming to match backend expectation
+      // ✅ Use indexed naming for images
       if (product.imageFile) {
         formData.append(`product_image[${index}]`, product.imageFile);
       }
     });
 
-    // Debug: Log what we're sending
+    // Debug logging
     console.log('Sending purchase with', products.length, 'products');
+    console.log('Bill Number:', $('#billNumber').val());
+    console.log('Supplier:', $('#supplierId').val());
 
     $.ajax({
       url: "{% url 'admin_purchase_add' %}",
@@ -565,7 +617,7 @@ $(document).ready(function() {
         Swal.fire({
           icon: 'success',
           title: 'Success',
-          text: 'Purchase order saved',
+          text: 'Purchase order saved successfully',
           timer: 2000,
           showConfirmButton: false
         }).then(() => {
@@ -574,14 +626,36 @@ $(document).ready(function() {
       },
       error: function(xhr) {
         console.error('Error saving purchase:', xhr);
+        console.error('Response:', xhr.responseText);
         $btn.prop('disabled', false).text('Save Purchase Order');
+        
+        let errorMsg = 'Failed to save purchase order.';
+        if (xhr.responseJSON && xhr.responseJSON.error) {
+          errorMsg = xhr.responseJSON.error;
+        } else if (xhr.responseText) {
+          errorMsg += ' Check console for details.';
+        }
+        
         Swal.fire({
           icon: 'error',
           title: 'Error',
-          text: 'Failed to save. Check console for details.'
+          text: errorMsg
         });
       }
     });
+  });
+
+  // Bill number suggestion (optional feature)
+  $('#suggestBillBtn').on('click', function() {
+    const supplierId = $('#supplierId').val();
+    if (!supplierId) {
+      showToast('Select supplier first', 'error');
+      return;
+    }
+    
+    // You can implement AJAX call to get next bill number
+    // For now, just show a placeholder
+    showToast('Feature coming soon', 'info');
   });
 });
 </script>

@@ -139,11 +139,11 @@
         <div class="space-y-4">
           <div class="flex justify-between text-sm">
             <span class="text-gray-600">Subtotal:</span>
-            <span class="font-medium text-gray-900">Rs. {{ sale.total_amount|floatformat:2 }}</span>
+            <span class="font-medium text-gray-900">Rs. {{ subtotal|floatformat:2 }}</span>
           </div>
           <div class="flex justify-between text-sm">
             <span class="text-gray-600">Tax:</span>
-            <span class="font-medium text-gray-900">Rs. 0.00</span>
+            <span class="font-medium text-gray-900">Rs. {{ tax_amount|floatformat:2 }}</span>
           </div>
           
           <div class="border-t border-gray-200 pt-4 space-y-3">
