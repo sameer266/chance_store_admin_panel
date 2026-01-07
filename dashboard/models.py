@@ -329,13 +329,7 @@ class Order(models.Model):
     # Order Status
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
 
-    estimated_delivery_date = models.DateField(
-        null=True, blank=True,
-        help_text="Calculated expected delivery date"
-    )
-    # Human readable estimated delivery summary preserved at order creation
-    estimated_days = models.CharField(max_length=100, blank=True, null=True, help_text='Estimated delivery summary (e.g. 2-4 days)')
-    
+   
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -349,47 +343,6 @@ class Order(models.Model):
     
     def __str__(self):
         return f"Order {self.order_number}"
-
-    def calculate_totals(self):
-        """Re-calculate subtotal, shipping_cost, tax and total for this order
-        based on current items snapshot and global TaxCost setting.
-        This stores the calculated values on the order record (does not create items).
-        """
-        items = self.items.all()
-        subtotal = sum((item.price * item.quantity) for item in items) if items else Decimal('0.00')
-        shipping_total = sum((item.shipping_cost * item.quantity) for item in items) if items else Decimal('0.00')
-
-        # Global tax percentage (TaxCost) – apply to (subtotal + shipping)
-        try:
-            tax_setting = TaxCost.objects.first()
-            tax_pct = Decimal(tax_setting.tax) if tax_setting else Decimal('0.00')
-        except Exception:
-            tax_pct = Decimal('0.00')
-
-        tax_amount = ((subtotal + shipping_total) * (tax_pct / Decimal('100.0'))).quantize(Decimal('0.01'))
-
-        total_val = subtotal + shipping_total + tax_amount - (self.discount or Decimal('0.00'))
-
-        # Update using update() to avoid recursion and signals being re-fired
-        Order.objects.filter(pk=self.pk).update(
-            subtotal=subtotal,
-            shipping_cost=shipping_total,
-            tax=tax_amount,
-            total=total_val
-        )
-        # Keep the instance in sync
-        self.subtotal = subtotal
-        self.shipping_cost = shipping_total
-        self.tax = tax_amount
-        self.total = total_val
-        # store a readable estimated_days summary for the order
-        try:
-            estimates = list({(it.estimated_days or '').strip() for it in items if (it.estimated_days or '').strip()})
-            est_text = ', '.join(sorted(estimates)) if estimates else None
-            Order.objects.filter(pk=self.pk).update(estimated_days=est_text)
-            self.estimated_days = est_text
-        except Exception:
-            pass
 
 
 class OrderItem(models.Model):

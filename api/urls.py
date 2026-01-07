@@ -23,19 +23,26 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view()),
     
     
+    
+
+    # Category APIs
+    path('categories/', views.CategoryApiView.as_view()),
+    
     # Pages APIs
     path('home/', views.HomeApiView.as_view()),
     path('all-collections/', views.AllCollectionsApiView.as_view()),
     path('new-arrivals/', views.NewArrivalsApiView.as_view()),
-    path('search-products/', views.FilterProductsApiView.as_view()),
+
+    path('filter-products/', views.FilterProductsApiView.as_view()),
+    path('search-products/', views.SearchProductsApiView.as_view()),
     
     
     # Details APIs
     path('product/<int:id>/', views.ProductDetailsApiView.as_view()),
     path('category/<int:category_id>/products/', views.CategoryProductsApiView.as_view()),
- 
-    
-    
+   
+
+
     # Cart APIs
     path('cart/', views.ViewCartApiView.as_view()),
     path('cart-add/', views.AddToCartApiView.as_view()),
@@ -51,4 +58,17 @@ urlpatterns = [
     
     
    
+    # Checkout API
+    path('checkout/', views.CheckoutApiView.as_view()),
+
+    # Review APIs
+    path('product/<int:product_id>/reviews/', views.ProductReviewsApiView.as_view()),
+
+    # Coupon API
+    path('coupon/verify/', views.CouponVerifyApiView.as_view()),
+
+
+    # Notification API
+    path('notifications/', views.NotificationApiView.as_view()),
+    
 ]

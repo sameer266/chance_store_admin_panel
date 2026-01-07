@@ -768,42 +768,113 @@ def admin_order_details(request, order_number):
 @admin_required
 def admin_payments_overview(request):
     """
-    Show a clean summary of all completed (delivered + paid) orders for the admin dashboard.
+    Show a clean summary of all completed (delivered + paid) orders 
+    AND physical sales for the admin dashboard.
     """
 
     # --- Filters ---
     date_from = request.GET.get('from', '')
     date_to = request.GET.get('to', '')
 
-    # --- Get all delivered & paid orders ---
-    orders = OrderItem.objects.select_related('order').filter(
+    # --- Get all delivered & paid online orders ---
+    online_orders = OrderItem.objects.select_related('order').filter(
         order__status='delivered',
         order__payment_status='paid'
     )
 
+    # --- Get physical sales ---
+    physical_sales = Sale.objects.select_related('customer').all()
+
     # --- Apply date filters ---
     if date_from:
-        orders = orders.filter(order__created_at__date__gte=date_from)
+        online_orders = online_orders.filter(order__created_at__date__gte=date_from)
+        physical_sales = physical_sales.filter(created_at__date__gte=date_from)
     if date_to:
-        orders = orders.filter(order__created_at__date__lte=date_to)
+        online_orders = online_orders.filter(order__created_at__date__lte=date_to)
+        physical_sales = physical_sales.filter(created_at__date__lte=date_to)
 
-    # --- Totals ---
-    total_orders = orders.count()
-    total_sales = Decimal('0.00')
+    # --- Calculate Online Totals ---
+    total_online_orders = online_orders.count()
+    total_online_sales = Decimal('0.00')
+    for oi in online_orders:
+        total_online_sales += Decimal(oi.get_total())
 
-    for oi in orders:
-        total_sales += Decimal(oi.get_total())
+    # --- Calculate Physical Sales Totals ---
+    total_physical_sales_count = physical_sales.count()
+    total_physical_sales_revenue = physical_sales.aggregate(
+        total=Sum('total_amount')
+    )['total'] or Decimal('0.00')
+    
+    total_physical_paid = physical_sales.aggregate(
+        total=Sum('paid_amount')
+    )['total'] or Decimal('0.00')
+    
+    total_physical_outstanding = physical_sales.aggregate(
+        total=Sum('outstanding_amount')
+    )['total'] or Decimal('0.00')
+
+    # --- Combined Totals ---
+    total_orders = total_online_orders + total_physical_sales_count
+    total_sales = total_online_sales + total_physical_sales_revenue
+
+    # --- Get recent transactions for display ---
+    # Combine online orders and physical sales
+    transactions = []
+    
+    # Add online orders
+    for item in online_orders[:50]:  # Limit for performance
+        transactions.append({
+            'type': 'online',
+            'id': item.order.order_number,
+            'customer': item.order.full_name,
+            'product': item.product.name,
+            'quantity': item.quantity,
+            'total': item.get_total(),
+            'payment_status': item.order.payment_status,
+            'date': item.order.created_at,
+        })
+    
+    # Add physical sales
+    for sale in physical_sales[:50]:  # Limit for performance
+        transactions.append({
+            'type': 'physical',
+            'id': sale.invoice_number,
+            'customer': sale.customer.name,
+            'product': f"{sale.items.count()} item(s)",
+            'quantity': sum(item.quantity for item in sale.items.all()),
+            'total': sale.total_amount,
+            'payment_status': sale.payment_status,
+            'date': sale.created_at,
+        })
+    
+    # Sort by date (most recent first)
+    transactions.sort(key=lambda x: x['date'], reverse=True)
 
     # --- Context ---
     context = {
+        # Combined totals
         'total_orders': total_orders,
         'total_sales': total_sales.quantize(Decimal('0.01')),
+        
+        # Online-specific
+        'total_online_orders': total_online_orders,
+        'total_online_sales': total_online_sales.quantize(Decimal('0.01')),
+        
+        # Physical sales-specific
+        'total_physical_sales_count': total_physical_sales_count,
+        'total_physical_sales_revenue': total_physical_sales_revenue.quantize(Decimal('0.01')),
+        'total_physical_paid': total_physical_paid.quantize(Decimal('0.01')),
+        'total_physical_outstanding': total_physical_outstanding.quantize(Decimal('0.01')),
+        
+        # Transactions
+        'transactions': transactions[:100],  # Limit to 100 most recent
+        
+        # Filters
         'date_from': date_from,
         'date_to': date_to,
     }
 
     return render(request, 'dashboard/pages/payment/overview.html', context)
-
 
 
 
