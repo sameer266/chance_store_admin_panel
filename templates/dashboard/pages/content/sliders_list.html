@@ -15,7 +15,7 @@
           <th class="px-4 py-3 text-left">Images</th>
           <th class="px-4 py-3 text-left">Title</th>
           <th class="px-4 py-3 text-left">Subtitle</th>
-          <th class="px-4 py-3 text-left">Link</th>
+   
           <th class="px-4 py-3 text-left">Created</th>
           <th class="px-4 py-3 text-center">Actions</th>
         </tr>
@@ -38,13 +38,7 @@
           </td>
           <td class="px-4 py-3 font-medium">{{ s.title|default:'-' }}</td>
           <td class="px-4 py-3">{{ s.subtitle|default:'-' }}</td>
-          <td class="px-4 py-3">
-            {% if s.link %}
-              <a href="{{ s.link }}" class="text-blue-600 hover:underline" target="_blank">{{ s.link }}</a>
-            {% else %}
-              -
-            {% endif %}
-          </td>
+     
           <td class="px-4 py-3">{{ s.created_at|date:"Y-m-d H:i" }}</td>
           <td class="px-4 py-3 text-center space-x-3">
             <!-- Edit icon -->

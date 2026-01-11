@@ -6,8 +6,7 @@ admin.site.register(UserRole)
 admin.site.register(UserProfile)
 admin.site.register(Category)
 admin.site.register(Product)
-admin.site.register(ProductImage)
-admin.site.register(ProductVariant)
+
 admin.site.register(Cart)
 admin.site.register(Order)
 admin.site.register(OrderItem)
@@ -15,8 +14,6 @@ admin.site.register(Review)
 admin.site.register(Coupon)
 admin.site.register(CouponUsage)
 admin.site.register(Organization)
-admin.site.register(Newsletter)
-admin.site.register(Contact)
 admin.site.register(Notification)
 
 

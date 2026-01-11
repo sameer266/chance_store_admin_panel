@@ -89,6 +89,7 @@
                       data-name="{{ product.name }}" 
                       data-cost-price="{{ product.cost_price|default:'0' }}"
                       data-price="{{ product.price|default:'0' }}"
+                      data-cut-price="{{ product.cut_price|default:'0' }}"
                       data-eta="{{ product.estimated_days|default:'' }}"
                       data-category="{{ product.category_id|default:'' }}"
                       data-image="{{ product.main_image.url|default:'' }}">
@@ -134,20 +135,37 @@
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div>
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+        <div class="md:col-span-2">
           <label class="block text-xs font-medium text-gray-700 mb-1.5">
-            ETA (days) 
+            Cut Price
+          </label>
+          <input type="number" id="productCutPrice" min="0" step="0.01" value="0" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="कटौती मूल्य">
+          <p class="text-xs text-gray-500 mt-0.5">अनलाइन एपमा देखाइने मूल मूल्य</p>
+        </div>
+        <div class="md:col-span-1.5">
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">
+            Discount %
+          </label>
+          <div class="flex items-center h-10 px-3 py-2 bg-green-50 border border-green-200 rounded-md">
+            <span id="discountPercentDisplay" class="text-sm font-semibold text-green-700">0%</span>
+          </div>
+          <p class="text-xs text-gray-500 mt-0.5">छुट प्रतिशत</p>
+        </div>
+        <div class="md:col-span-2.5">
+          <label class="block text-xs font-medium text-gray-700 mb-1.5">
+            Estimated Delivery 
           </label>
           <input type="text" id="productETA" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent" placeholder="e.g., 2-4 days">
+          <p class="text-xs text-gray-500 mt-0.5">डिलिभरी हुन लाग्ने समय</p>
         </div>
-        <div>
+        <div class="md:col-span-3">
           <label class="block text-xs font-medium text-gray-700 mb-1.5">
             Product Image <span class="text-red-500">*</span>
           </label>
           <input type="file" id="productImage" accept="image/*" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-gray-100 file:text-gray-700 hover:file:bg-gray-200">
         </div>
-        <div id="imagePreview" class="hidden">
+        <div id="imagePreview" class="hidden md:col-span-3">
           <p class="text-xs font-medium text-gray-700 mb-1.5">Preview</p>
           <div class="relative inline-block">
             <img id="previewImg" src="" alt="Preview" class="h-20 w-20 object-cover rounded border border-gray-300">
@@ -193,6 +211,8 @@
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-700">Qty</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-700">Cost</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-700">Price</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-700">Cut Price</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-700">Discount</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-700">ETA</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-700">Total</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-700">Actions</th>
@@ -266,6 +286,28 @@ $(document).ready(function() {
     });
   }
 
+  // Calculate discount percentage when price or cut price changes
+  function updateDiscountPercentage() {
+    const price = parseFloat($('#productPrice').val()) || 0;
+    const cutPrice = parseFloat($('#productCutPrice').val()) || 0;
+    
+    let discountPercent = 0;
+    if (cutPrice > 0 && cutPrice > price) {
+      discountPercent = ((cutPrice - price) / cutPrice) * 100;
+    }
+    
+    $('#discountPercentDisplay').text(discountPercent.toFixed(0) + '%');
+    
+    // Change color based on discount
+    if (discountPercent > 0) {
+      $('#discountPercentDisplay').removeClass('text-gray-500').addClass('text-green-700');
+    } else {
+      $('#discountPercentDisplay').removeClass('text-green-700').addClass('text-gray-500');
+    }
+  }
+
+  $('#productPrice, #productCutPrice').on('input', updateDiscountPercentage);
+
   // Image preview handling
   $('#productImage').on('change', function() {
     const file = this.files[0];
@@ -292,6 +334,7 @@ $(document).ready(function() {
       $('#productCategory').val($option.data('category') || '');
       $('#productCostPrice').val($option.data('cost-price') || 0);
       $('#productPrice').val($option.data('price') || 0);
+      $('#productCutPrice').val($option.data('cut-price') || 0);
       $('#productETA').val($option.data('eta') || '');
       
       const imageUrl = $option.data('image');
@@ -299,6 +342,8 @@ $(document).ready(function() {
         $('#previewImg').attr('src', imageUrl);
         $('#imagePreview').removeClass('hidden');
       }
+      
+      updateDiscountPercentage();
       showToast('Product loaded', 'info');
     }
   });
@@ -312,9 +357,16 @@ $(document).ready(function() {
     const qty = parseFloat($('#productQty').val()) || 0;
     const costPrice = parseFloat($('#productCostPrice').val()) || 0;
     const price = parseFloat($('#productPrice').val()) || 0;
+    const cutPrice = parseFloat($('#productCutPrice').val()) || 0;
     const eta = $('#productETA').val().trim();
     const imageFile = $('#productImage')[0].files[0];
     const existingImage = $('#previewImg').attr('src');
+
+    // Calculate discount
+    let discountPercent = 0;
+    if (cutPrice > 0 && cutPrice > price) {
+      discountPercent = ((cutPrice - price) / cutPrice) * 100;
+    }
 
     // Validation
     if (!name) {
@@ -356,6 +408,8 @@ $(document).ready(function() {
       quantity: qty,
       costPrice: costPrice,
       price: price,
+      cutPrice: cutPrice,
+      discountPercent: discountPercent,
       eta: eta,
       total: qty * costPrice,
       image: existingImage,
@@ -399,6 +453,14 @@ $(document).ready(function() {
     $('#itemCount').text(`(${products.length})`);
 
     products.forEach((product, index) => {
+      const discountBadge = product.discountPercent > 0 
+        ? `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">${product.discountPercent.toFixed(0)}%</span>`
+        : `<span class="text-xs text-gray-400">0%</span>`;
+      
+      const cutPriceDisplay = product.cutPrice > 0 
+        ? `Rs. ${product.cutPrice.toFixed(2)}`
+        : `<span class="text-xs text-gray-400">-</span>`;
+
       const row = `
         <tr class="hover:bg-gray-50">
           <td class="px-4 py-3 text-xs text-gray-600">${index + 1}</td>
@@ -410,6 +472,8 @@ $(document).ready(function() {
           <td class="px-4 py-3 text-sm text-center text-gray-900">${product.quantity}</td>
           <td class="px-4 py-3 text-sm text-right text-gray-900">Rs. ${product.costPrice.toFixed(2)}</td>
           <td class="px-4 py-3 text-sm text-right text-gray-900">Rs. ${product.price.toFixed(2)}</td>
+          <td class="px-4 py-3 text-sm text-right text-gray-600">${cutPriceDisplay}</td>
+          <td class="px-4 py-3 text-center">${discountBadge}</td>
           <td class="px-4 py-3 text-xs text-gray-600">${product.eta || '-'}</td>
           <td class="px-4 py-3 text-sm text-right font-medium text-gray-900">Rs. ${product.total.toFixed(2)}</td>
           <td class="px-4 py-3 text-center">
@@ -441,9 +505,12 @@ $(document).ready(function() {
     $('#productQty').val(product.quantity);
     $('#productCostPrice').val(product.costPrice);
     $('#productPrice').val(product.price);
+    $('#productCutPrice').val(product.cutPrice);
     $('#productETA').val(product.eta);
     $('#previewImg').attr('src', product.image);
     $('#imagePreview').removeClass('hidden');
+
+    updateDiscountPercentage();
 
     editingIndex = index;
     $('#addProductBtn').text('Update Product');
@@ -506,9 +573,11 @@ $(document).ready(function() {
     $('#productQty').val('1');
     $('#productCostPrice').val('0');
     $('#productPrice').val('0');
+    $('#productCutPrice').val('0');
     $('#productETA').val('');
     $('#productImage').val('');
     $('#imagePreview').addClass('hidden');
+    $('#discountPercentDisplay').text('0%');
     editingIndex = -1;
     $('#addProductBtn').text('Add Product');
     $('#editMode').addClass('hidden');
@@ -532,7 +601,7 @@ $(document).ready(function() {
 
   $('#taxPercent, #discountAmount').on('input', calculateTotals);
 
-  // ✅ FIXED: Save purchase order with bill_number
+  // Save purchase order
   $('#savePurchaseBtn').on('click', function() {
     const $btn = $(this);
     
@@ -543,7 +612,6 @@ $(document).ready(function() {
       return;
     }
     
-    // ✅ Validate bill number
     if (!$('#billNumber').val().trim()) {
       showToast('Enter bill number', 'error');
       $('#billNumber').focus();
@@ -573,8 +641,6 @@ $(document).ready(function() {
     formData.append('supplier', $('#supplierId').val());
     formData.append('purchase_date', $('#purchaseDate').val());
     formData.append('notes', $('#notes').val());
-    
-    // ✅ CRITICAL FIX: Add bill_number
     formData.append('bill_number', $('#billNumber').val().trim());
     
     const subtotal = products.reduce((sum, p) => sum + p.total, 0);
@@ -592,19 +658,14 @@ $(document).ready(function() {
       formData.append('quantity[]', product.quantity);
       formData.append('purchase_price[]', product.costPrice);
       formData.append('selling_price[]', product.price);
+      formData.append('cut_price[]', product.cutPrice || 0);
       formData.append('estimated_days[]', product.eta);
       formData.append('product_sku[]', '');
       
-      // ✅ Use indexed naming for images
       if (product.imageFile) {
         formData.append(`product_image[${index}]`, product.imageFile);
       }
     });
-
-    // Debug logging
-    console.log('Sending purchase with', products.length, 'products');
-    console.log('Bill Number:', $('#billNumber').val());
-    console.log('Supplier:', $('#supplierId').val());
 
     $.ajax({
       url: "{% url 'admin_purchase_add' %}",
@@ -645,7 +706,7 @@ $(document).ready(function() {
     });
   });
 
-  // Bill number suggestion (optional feature)
+  // Bill number suggestion
   $('#suggestBillBtn').on('click', function() {
     const supplierId = $('#supplierId').val();
     if (!supplierId) {
@@ -653,8 +714,6 @@ $(document).ready(function() {
       return;
     }
     
-    // You can implement AJAX call to get next bill number
-    // For now, just show a placeholder
     showToast('Feature coming soon', 'info');
   });
 });

@@ -1,11 +1,13 @@
+# CORRECTED models.py with all critical fixes
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils.text import slugify
 from django.utils import timezone
-from django.core.validators import FileExtensionValidator
+
 from decimal import Decimal
 from ckeditor.fields import RichTextField    
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save,post_delete
 from django.dispatch import receiver
 
 
@@ -36,7 +38,6 @@ class UserRole(models.Model):
     
     def is_customer(self):
         return self.role == 'customer'
-    
     
     def is_admin(self):
         return self.role == 'admin'
@@ -78,7 +79,6 @@ class UserProfile(models.Model):
             return 'No Role Assigned'
 
 
-
 # -------------------------
 # Category Management (Hierarchical)
 # -------------------------
@@ -93,6 +93,9 @@ class Category(models.Model):
     class Meta:
         verbose_name_plural = 'Categories'
         ordering = ['order', 'name']
+        indexes = [
+            models.Index(fields=['is_active', 'order']),
+        ]
     
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -107,15 +110,11 @@ class Category(models.Model):
     
     def __str__(self):
         return self.name
-      
-    
-    
 
 
 # -------------------------
 # Product Management
 # -------------------------
-
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, related_name='products')
     
@@ -126,7 +125,8 @@ class Product(models.Model):
     
     # Pricing
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    cost_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text='For  tracking')
+    cost_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text='For tracking')
+    cut_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     
     # Stock Management
     sku = models.CharField(max_length=100, unique=True, blank=True, null=True, help_text='Stock Keeping Unit')
@@ -136,7 +136,6 @@ class Product(models.Model):
     # Product Details
     brand = models.CharField(max_length=100, blank=True)
     weight = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True, help_text='Weight in kg')
-    # Per-product shipping and delivery estimate
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Shipping cost per unit for this product')
     estimated_days = models.CharField(max_length=50, blank=True, null=True, help_text='Estimated delivery time (days or string like "2-4 days")')
     
@@ -150,6 +149,13 @@ class Product(models.Model):
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['is_active', '-created_at']),
+            models.Index(fields=['category', 'is_active']),
+            models.Index(fields=['slug']),
+        ]
     
     def save(self, *args, **kwargs):
         # Auto-generate slug if blank
@@ -168,18 +174,15 @@ class Product(models.Model):
             
         super().save(*args, **kwargs)
     
- 
     def in_stock(self):
         return self.stock > 0
     
- 
     def is_low_stock(self):
         return 0 < self.stock <= self.low_stock_alert
     
-
     def discount_percentage(self):
-        if self.cost_price and self.cost_price > self.price:
-            return int(((self.cost_price - self.price) / self.cost_price) * 100)
+        if self.cut_price and self.cut_price > self.price:
+            return int(((self.cut_price - self.price) / self.cut_price) * 100)
         return 0
 
     def average_rating(self):
@@ -192,75 +195,22 @@ class Product(models.Model):
         return self.name
 
 
-class ProductImage(models.Model):
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
-    image = models.ImageField(upload_to='products/gallery/')
-    order = models.PositiveIntegerField(default=0)
-    
-    class Meta:
-        ordering = ['order']
-    
-    def __str__(self):
-        return f"Image for {self.product.name}"
-
-
-class ProductVariant(models.Model):
-    """For size, color, weight variations"""
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='variants')
-    
-    VARIANT_TYPES = [
-        ('size', 'Size'),
-        ('color', 'Color'),
-        ('weight', 'Weight'),
-        ('storage', 'Storage Capacity'),
-        ('ram', 'RAM'),
-        ('material', 'Material'),
-        ('style', 'Style'),
-        ('pattern', 'Pattern'),
-        ('flavor', 'Flavor'),
-        ('other', 'Other'),
-        
-    ]
-    variant_type = models.CharField(max_length=20, choices=VARIANT_TYPES)
-    name = models.CharField(max_length=100)
-    
-    price_adjustment = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
-
-    
-    class Meta:
-        unique_together = ('product', 'variant_type', 'name')
-    
-    def __str__(self):
-        return f"{self.product.name} - {self.name}"
-
-
 # -------------------------
 # Cart & Wishlist
 # -------------------------
-
-
 class Cart(models.Model):
-    # Authenticated user (optional for guest)
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
-
     session_key = models.CharField(max_length=40, null=True, blank=True, help_text="For non-authenticated users")
-    
     product = models.ForeignKey('Product', on_delete=models.CASCADE)
-    variant = models.ForeignKey('ProductVariant', on_delete=models.CASCADE, null=True, blank=True)
     quantity = models.PositiveIntegerField(default=1)
     added_at = models.DateTimeField(auto_now_add=True)
 
     def get_total_price(self):
         price = self.product.price
-        if self.variant:
-            price += self.variant.price_adjustment
         return price * self.quantity
 
     def get_item_price(self):
         price = self.product.price
-        if self.variant:
-            price += self.variant.price_adjustment
         return price
     
     def __str__(self):
@@ -307,8 +257,7 @@ class Order(models.Model):
     email = models.EmailField()
     address = models.TextField()
     city = models.CharField(max_length=100)
-    
-    province = models.CharField(max_length=20,null=True,blank=True)
+    province = models.CharField(max_length=20, null=True, blank=True)
     postal_code = models.CharField(max_length=10, blank=True)
     
     # Order Pricing
@@ -318,8 +267,9 @@ class Order(models.Model):
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2)
     
+    
     # Payment
-    payment_method = models.CharField(max_length=20, choices=PAYMENT_CHOICES,default="cod")
+    payment_method = models.CharField(max_length=20, choices=PAYMENT_CHOICES, default="cod")
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='unpaid')
     transaction_id = models.CharField(max_length=100, blank=True)
     
@@ -328,18 +278,52 @@ class Order(models.Model):
     
     # Order Status
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-
-   
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['order_number']),
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['payment_status']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+    
     def save(self, *args, **kwargs):
         if not self.order_number:
-            # Format: ORD20250113123456
             self.order_number = f"ORD{timezone.now().strftime('%Y%m%d%H%M%S')}"
         super().save(*args, **kwargs)
+    
+    # ✅ FIX #1: ADD MISSING calculate_totals() METHOD
+    def calculate_totals(self):
+        """
+        Calculate order totals from order items.
+        Called by signal when OrderItems are created/updated.
+        """
+        # Calculate subtotal from all order items
+        self.subtotal = sum(item.get_total() for item in self.items.all()) or Decimal('0.00')
+        
+        # Calculate total shipping cost (sum of all item shipping costs × quantities)
+        self.shipping_cost = sum(
+            (item.shipping_cost or Decimal('0')) * item.quantity 
+            for item in self.items.all()
+        ) or Decimal('0.00')
+        
+        # Tax is already set (usually a percentage), so we use existing value
+        # If you want to recalculate tax, you can do:
+        # tax_rate = self.tax / Decimal('100') if self.tax else Decimal('0')
+        # self.tax = self.subtotal * tax_rate
+        
+        # Calculate total: subtotal + shipping + tax - discount
+        self.total = self.subtotal + self.shipping_cost + self.tax - self.discount
+        
+        # Save only specific fields to avoid triggering unnecessary signals
+        self.save(update_fields=['subtotal', 'shipping_cost', 'total'])
     
     def __str__(self):
         return f"Order {self.order_number}"
@@ -348,39 +332,30 @@ class Order(models.Model):
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True)
-    variant = models.ForeignKey(ProductVariant, on_delete=models.SET_NULL, null=True, blank=True)
-    
- 
     quantity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
-    # Snapshot the per-item shipping cost and estimated delivery at time of order placement
     shipping_cost = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     estimated_days = models.CharField(max_length=50, blank=True, null=True)
     
-
     def get_total(self):
         return self.quantity * self.price
 
     def save(self, *args, **kwargs):
         """
-        Ensure we store a snapshot of per-product shipping_cost and estimated_days
-        when an OrderItem is saved (created) so later changes to the Product
-        don't affect historical orders.
+        Snapshot per-product shipping_cost and estimated_days at order time.
         """
         if self.product:
-            # If shipping_cost is zero or not set, copy from product
             try:
                 if (self.shipping_cost is None or self.shipping_cost == 0) and hasattr(self.product, 'shipping_cost'):
                     self.shipping_cost = self.product.shipping_cost or 0
                 if (not self.estimated_days) and hasattr(self.product, 'estimated_days'):
                     self.estimated_days = self.product.estimated_days
             except Exception:
-                # Keep existing values on lookup issues
                 pass
         super().save(*args, **kwargs)
     
     def __str__(self):
-        return f"{self.quantity} x {self.product.name}"
+        return f"{self.quantity} x {self.product.name if self.product else 'Unknown Product'}"
 
 
 # -------------------------
@@ -403,7 +378,6 @@ class Review(models.Model):
 # -------------------------
 # Coupons & Discounts
 # -------------------------
-
 class Coupon(models.Model):
     code = models.CharField(max_length=50, unique=True)
     description = models.CharField(max_length=255, blank=True)
@@ -415,43 +389,34 @@ class Coupon(models.Model):
     discount_type = models.CharField(max_length=10, choices=DISCOUNT_TYPES)
     discount_value = models.DecimalField(max_digits=10, decimal_places=2)
     
-    # Conditions
     min_purchase = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Minimum order value')
     max_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Max discount amount (for percentage)')
     
-    # Usage limits
     usage_limit = models.PositiveIntegerField(null=True, blank=True, help_text='Total usage limit')
     usage_limit_per_user = models.PositiveIntegerField(null=True, blank=True, help_text='Per user limit')
     used_count = models.PositiveIntegerField(default=0)
     
-    # Validity
     valid_from = models.DateTimeField()
     valid_to = models.DateTimeField()
     is_active = models.BooleanField(default=True)
     
-    # Restrictions
     categories = models.ManyToManyField('Category', blank=True, help_text='Applicable categories')
-    
     created_at = models.DateTimeField(auto_now_add=True)
 
     def is_valid(self, user=None, cart_items=None):
         """Check if coupon is valid for the user and cart"""
         now = timezone.now()
-        # Basic checks: active and date
         if not (self.is_active and self.valid_from <= now <= self.valid_to):
             return False, "This coupon is not active or has expired."
 
-        # Check total usage limit
         if self.usage_limit is not None and self.used_count >= self.usage_limit:
             return False, "This coupon has reached its usage limit."
 
-        # Check per-user usage
         if user and self.usage_limit_per_user is not None:
             user_used_count = CouponUsage.objects.filter(user=user, coupon=self).count()
             if user_used_count >= self.usage_limit_per_user:
                 return False, "You have already used this coupon the maximum number of times."
 
-        # Check minimum purchase
         if cart_items is not None:
             subtotal = sum(item.get_item_price() * item.quantity for item in cart_items)
             if subtotal < self.min_purchase:
@@ -474,7 +439,6 @@ class Coupon(models.Model):
 
 
 class CouponUsage(models.Model):
-    """Track coupon usage per user"""
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE)
     order = models.ForeignKey('Order', on_delete=models.CASCADE)
@@ -485,14 +449,9 @@ class CouponUsage(models.Model):
 
 
 # -------------------------
-# Shipping Zones
+# Tax Configuration
 # -------------------------
 class TaxCost(models.Model):
-    """Global tax configuration used for checkout/order tax calculations.
-
-    We removed the concept of a single global shipping cost (shipping is per-product)
-    and keep a single global TaxCost (percentage) to apply to order totals.
-    """
     tax = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text="Tax percentage (e.g. 13 for 13%)")
 
     class Meta:
@@ -504,16 +463,14 @@ class TaxCost(models.Model):
 
 
 # -------------------------
-#  Invoice
+# Invoice
 # -------------------------
 class Invoice(models.Model):
-    invoice_number = models.CharField(max_length=20,null=True, unique=True, editable=False)
+    invoice_number = models.CharField(max_length=20, null=True, unique=True, editable=False)
     order = models.ForeignKey('Order', on_delete=models.CASCADE, related_name='invoices')
     customer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    
     created_at = models.DateTimeField(auto_now_add=True)
     
-    # Totals
     subtotal = models.DecimalField(max_digits=12, decimal_places=2)
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -540,17 +497,12 @@ class Invoice(models.Model):
 # Organization Info
 # -------------------------
 class Organization(models.Model):
-    # Basic Info
     name = models.CharField(max_length=200, default="My Store")
     logo = models.ImageField(upload_to='org/', blank=True, null=True)
-    
-    # Contact
     email = models.EmailField()
     phone = models.CharField(max_length=15)
     phone_secondary = models.CharField(max_length=15, blank=True)
     address = models.TextField()
-    
-    # Social Media
     facebook = models.URLField(blank=True)
     instagram = models.URLField(blank=True)
     twitter = models.URLField(blank=True)
@@ -570,38 +522,6 @@ class Organization(models.Model):
         super().save(*args, **kwargs)
 
 
-# -------------------------
-# Newsletter
-# -------------------------
-class Newsletter(models.Model):
-    email = models.EmailField(unique=True)
-    subscribed_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
-    
-    def __str__(self):
-        return self.email
-
-
-# -------------------------
-# Contact Messages
-# -------------------------
-class Contact(models.Model):
-    name = models.CharField(max_length=100)
-    email = models.EmailField()
-    phone = models.CharField(max_length=15, blank=True)
-    subject = models.CharField(max_length=200, blank=True)
-    message = models.TextField()
-    
-    is_read = models.BooleanField(default=False)
-    replied = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    class Meta:
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"Message from {self.name}"
-
 
 # -------------------------
 # Notifications
@@ -617,11 +537,9 @@ class Notification(models.Model):
         ('other', 'Other'),
     ]
     notification_type = models.CharField(max_length=20, choices=NOTIFICATION_TYPES)
-    
     title = models.CharField(max_length=200)
     message = models.TextField()
     link = models.URLField(blank=True)
-    
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     
@@ -630,11 +548,11 @@ class Notification(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - {self.title}"
-    
-    
-   
 
-# Slider model
+
+# -------------------------
+# Slider & Banner
+# -------------------------
 class Slider(models.Model):
     title = models.CharField(max_length=200, blank=True, null=True)
     subtitle = models.CharField(max_length=300, blank=True, null=True)
@@ -647,24 +565,16 @@ class Slider(models.Model):
         return self.title or f"Slider {self.id}"
 
 
-
 class Banner(models.Model):
     PAGE_CHOICES = [
         ('home', 'Home Page'),
         ('products', 'Products Page'),
-      
     ]
 
     title = models.CharField(max_length=200, blank=True, null=True)
     image = models.ImageField(upload_to='banners/')
     link = models.URLField(max_length=500, blank=True, null=True)
-    page = models.CharField(
-        max_length=50, 
-        choices=PAGE_CHOICES, 
-        default='home', 
-        unique=True,  # Only one banner per page
-        help_text="Select where to display the banner"
-    )
+    page = models.CharField(max_length=50, choices=PAGE_CHOICES, default='home', unique=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -684,7 +594,6 @@ class Supplier(models.Model):
     address = models.TextField(blank=True)
     city = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True, help_text='Additional notes about the supplier')
-    
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -697,34 +606,17 @@ class Supplier(models.Model):
 
 
 # -------------------------
-# Purchase History (from Suppliers)
+# Purchase History
 # -------------------------
-
-
 class Purchase(models.Model):
-    supplier = models.ForeignKey(
-        Supplier,
-        on_delete=models.SET_NULL,
-        null=True,
-        related_name='purchases'
-    )
-
+    """
+    Purchase Order from supplier.
+    This is the operational record that can be modified.
+    """
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, related_name='purchases')
     purchase_date = models.DateField(default=timezone.now)
-    
-    # Manual bill number input by admin
-    bill_number = models.CharField(
-        max_length=50,
-        blank=True,
-        null=True,
-        help_text='Bill number from supplier (e.g., 0001, 0002, or custom like ABC-001)'
-    )
-    
-    supplier_invoice_number = models.CharField(
-        max_length=100,
-        blank=True,
-        help_text='Auto-generated full invoice number'
-    )
-    
+    bill_number = models.CharField(max_length=50, blank=True, null=True, help_text='Bill number from supplier')
+    supplier_invoice_number = models.CharField(max_length=100, blank=True, help_text='Auto-generated full invoice number')
     purchase_order_number = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
 
@@ -738,32 +630,21 @@ class Purchase(models.Model):
 
     class Meta:
         ordering = ['-purchase_date', '-created_at']
+        indexes = [
+            models.Index(fields=['-purchase_date']),
+            models.Index(fields=['supplier', '-purchase_date']),
+        ]
 
     def save(self, *args, **kwargs):
-        """
-        Generate full supplier invoice number based on admin's bill number input.
-        Format: {SUPPLIER_CODE}-{DATE}-{BILL_NUMBER}
-        
-        Admin can input just the bill number (e.g., "0001" or "ABC-001"),
-        and the system will generate the full invoice number.
-        """
+        """Generate full supplier invoice number"""
         if self.supplier and self.bill_number:
             today = timezone.now().strftime('%Y%m%d')
-            
-            # Get supplier code (first 3 letters of name)
             supplier_code = ''.join(filter(str.isalpha, self.supplier.name[:3])).upper()
             if not supplier_code:
                 supplier_code = 'SUP'
-            
-            # Clean the bill number (remove any extra spaces)
             clean_bill_number = str(self.bill_number).strip()
-            
-            # Generate full invoice number
             self.supplier_invoice_number = f"{supplier_code}-{today}-{clean_bill_number}"
-            
-    
         elif not self.supplier_invoice_number:
-            # Fallback if no bill number provided
             today = timezone.now().strftime('%Y%m%d')
             last_purchase = Purchase.objects.order_by('-id').first()
             next_id = (last_purchase.id + 1) if last_purchase else 1
@@ -776,67 +657,47 @@ class Purchase(models.Model):
     
     def calculate_totals(self):
         """Calculate and update subtotal and total_amount based on items"""
-        # Calculate subtotal from all purchase items
         self.subtotal = sum(item.get_total() for item in self.items.all()) or Decimal('0.00')
-        
-        # Ensure tax_amount and discount are Decimal
         tax = Decimal(str(self.tax_amount or 0))
         discount = Decimal(str(self.discount or 0))
-        
-        # Calculate total: subtotal + tax - discount
         self.total_amount = self.subtotal + tax - discount
-        
-        # Save the calculated totals
         self.save(update_fields=['subtotal', 'total_amount'])
     
     def __str__(self):
         return f"Purchase {self.supplier_invoice_number} from {self.supplier.name if self.supplier else 'Unknown'}"
 
 
-
 class PurchaseItem(models.Model):
     """Individual product items in a purchase order"""
     purchase = models.ForeignKey(Purchase, on_delete=models.CASCADE, related_name='items')
-    
-    # Product reference (optional - product might be deleted)
     product = models.ForeignKey(Product, on_delete=models.SET_NULL, null=True, blank=True, related_name='purchase_items')
-    
-    # Snapshot of product details at purchase time (to preserve history even if product changes)
     product_name = models.CharField(max_length=255, help_text='Product name at time of purchase')
     product_sku = models.CharField(max_length=100, blank=True, null=True, help_text='Product SKU at time of purchase')
-    product_image = models.ImageField(upload_to='purchases/products/', blank=True, null=True, help_text='Product image at time of purchase')
+    product_image = models.ImageField(upload_to='purchases/products/', blank=True, null=True)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2, help_text='Price per unit paid to supplier')
     quantity = models.PositiveIntegerField()
-    
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         ordering = ['id']
     
     def get_total(self):
-        """Calculate total for this item"""
         return self.purchase_price * self.quantity
     
     def save(self, *args, **kwargs):
-        # If product is linked, capture current product details as snapshot
         if self.product:
             if not self.product_name:
                 self.product_name = self.product.name
             if not self.product_sku:
                 self.product_sku = self.product.sku or ''
-            # Note: product_image should be uploaded separately, not copied from product
-            # This preserves the image that was uploaded at purchase time
-        # Save the item first
+        
         super().save(*args, **kwargs)
-        # Recalculate purchase totals (only if purchase exists and is saved)
-        # Use update_fields to avoid recursion
+        
         if self.purchase and self.purchase.pk:
             try:
-                # Refresh purchase from DB to ensure we have latest data
                 self.purchase.refresh_from_db()
                 self.purchase.calculate_totals()
             except Exception as e:
-                # Log error but don't fail the save
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.error(f"Error calculating purchase totals: {e}")
@@ -844,7 +705,6 @@ class PurchaseItem(models.Model):
     def delete(self, *args, **kwargs):
         purchase = self.purchase
         super().delete(*args, **kwargs)
-        # Recalculate purchase totals after deletion
         if purchase:
             purchase.calculate_totals()
     
@@ -853,14 +713,17 @@ class PurchaseItem(models.Model):
 
 
 # -------------------------
-# Purchase Invoice (for Supplier Purchases)
+# Purchase Invoice (Historical Snapshot)
 # -------------------------
 class PurchaseInvoice(models.Model):
-    """Invoice for purchases from suppliers - stores historical product and supplier data"""
+    """
+    Historical invoice for purchases from suppliers.
+    This is a SNAPSHOT that should NOT be modified after creation.
+    """
     invoice_number = models.CharField(max_length=50, unique=True, editable=False)
     purchase = models.OneToOneField(Purchase, on_delete=models.CASCADE, related_name='invoice')
     
-    # Supplier snapshot (preserved even if supplier details change)
+    # Supplier snapshot
     supplier_name = models.CharField(max_length=200, help_text='Supplier name at time of purchase')
     supplier_email = models.EmailField(blank=True)
     supplier_phone = models.CharField(max_length=15, blank=True)
@@ -875,8 +738,8 @@ class PurchaseInvoice(models.Model):
     
     # Invoice details
     purchase_date = models.DateField()
-    supplier_invoice_number = models.CharField(max_length=100, blank=True, help_text='Supplier invoice number')
-    purchase_order_number = models.CharField(max_length=100, blank=True, help_text='Purchase order number')
+    supplier_invoice_number = models.CharField(max_length=100, blank=True)
+    purchase_order_number = models.CharField(max_length=100, blank=True)
     
     PAYMENT_STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -897,31 +760,28 @@ class PurchaseInvoice(models.Model):
     
     def save(self, *args, **kwargs):
         if not self.invoice_number:
-            # Format: PINV20250113123456
             self.invoice_number = f"PINV{timezone.now().strftime('%Y%m%d%H%M%S')}"
         super().save(*args, **kwargs)
     
-    def __str__(self):
-        return f"Purchase Invoice {self.invoice_number} - {self.supplier_name}"
-
     @property
     def outstanding_amount(self):
         try:
             return (self.total_amount - (self.paid_amount or Decimal('0.00')))
         except Exception:
             return self.total_amount
+    
+    def __str__(self):
+        return f"Purchase Invoice {self.invoice_number} - {self.supplier_name}"
 
 
 class PurchaseInvoiceItem(models.Model):
-    """Individual items in purchase invoice - stores historical product data"""
+    """Individual items in purchase invoice - historical snapshot"""
     invoice = models.ForeignKey(PurchaseInvoice, on_delete=models.CASCADE, related_name='items')
-    
-    # Product snapshot (preserved even if product details change)
-    product_name = models.CharField(max_length=255, help_text='Product name at time of purchase')
-    product_sku = models.CharField(max_length=100, blank=True, null=True, help_text='Product SKU at time of purchase')
-    product_image = models.ImageField(upload_to='purchase_invoice_items/', blank=True, null=True, help_text='Product image at time of purchase')
+    product_name = models.CharField(max_length=255)
+    product_sku = models.CharField(max_length=100, blank=True, null=True)
+    product_image = models.ImageField(upload_to='purchase_invoice_items/', blank=True, null=True)
     quantity = models.PositiveIntegerField()
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2, help_text='Price per unit at time of purchase')
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total = models.DecimalField(max_digits=10, decimal_places=2)
     
     class Meta:
@@ -932,127 +792,13 @@ class PurchaseInvoiceItem(models.Model):
 
 
 # ===========================
-#   Signals 
+# Services & Sales
 # ===========================
-
-
-@receiver(post_save, sender=Order)
-def handle_order_payment_status_change(sender, instance, created, **kwargs):
-    """
-    Handle order payment status changes:
-    1. Auto-update order status to 'delivered' when payment is marked as 'paid'
-    2. Sync invoice payment status with order payment status
-    
-    Uses update() to prevent signal recursion.
-    """
-    # Skip if this is a new order to avoid unnecessary processing
-    if created:
-        return
-    
-    # Auto-update order status to 'delivered' when payment is marked as 'paid'
-    if instance.payment_status == 'paid':
-        # Only update to delivered if order is not already cancelled or refunded or delivered
-        if instance.status not in ['cancelled', 'refunded', 'delivered']:
-            # Use update() to avoid triggering signals again (prevents recursion)
-            Order.objects.filter(pk=instance.pk).update(
-                status='delivered',
-                delivered_at=timezone.now() if not instance.delivered_at else instance.delivered_at
-            )
-    
-    # Sync invoice payment status with order payment status
-    try:
-        if instance.user:
-            invoice = Invoice.objects.filter(order=instance, customer=instance.user).first()
-            if invoice:
-                invoice_status_map = {
-                    "unpaid": "pending",
-                    "paid": "paid",
-                    "failed": "failed",
-                    "refunded": "failed"
-                }
-                new_invoice_status = invoice_status_map.get(instance.payment_status, invoice.payment_status)
-                if invoice.payment_status != new_invoice_status:
-                    invoice.payment_status = new_invoice_status
-                    invoice.save(update_fields=['payment_status'])
-    except Exception:
-        # Silently fail if invoice doesn't exist or other error
-        pass
-
-
-@receiver(post_save, sender=OrderItem)
-def update_order_totals_on_item_change(sender, instance, created, **kwargs):
-    """Recalculate Order totals whenever an OrderItem is created/updated."""
-    try:
-        if instance.order_id:
-            instance.order.calculate_totals()
-    except Exception:
-        pass
-
-
-from django.db.models.signals import post_delete
-
-
-@receiver(post_delete, sender=OrderItem)
-def update_order_totals_on_item_delete(sender, instance, **kwargs):
-    try:
-        if instance.order_id:
-            order = Order.objects.filter(pk=instance.order_id).first()
-            if order:
-                order.calculate_totals()
-    except Exception:
-        pass
-
-
-@receiver(post_save, sender=Order)
-def ensure_order_items_snapshots(sender, instance, created, **kwargs):
-    """Make sure any newly added order items have shipping snapshot filled.
-
-    This is a best-effort to keep historical consistency for systems that
-    create items directly after the order is saved.
-    """
-    try:
-        for it in instance.items.all():
-            if (not it.shipping_cost or it.shipping_cost == 0) or not it.estimated_days:
-                it.save()
-    except Exception:
-        pass
-
-
-
-
-    
-            
-            
-        
-
-
-@receiver(post_save, sender=User)
-def create_user_role_and_profile(sender, instance, created, **kwargs):
-    """
-    Automatically creates a UserRole and UserProfile
-    when a new user (including superuser) is created.
-    """
-
-    # Run only when a new user is created
-    if created and instance.is_superuser:
-        UserRole.objects.get_or_create(role="admin",user=instance)
-        UserProfile.objects.get_or_create(user=instance)
-        print("created")
-
-
-# ===========================
-#   Sales Management (Physical/Offline)
-# ===========================
-
-
-# -------------------------
-# Services Module
-# -------------------------
 class Service(models.Model):
     name = models.CharField(max_length=150)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    cost_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text='Cost price for this service')
+    cost_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     image = models.ImageField(upload_to='services/', blank=True, null=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1061,18 +807,12 @@ class Service(models.Model):
         return self.name
 
     def discount_percentage(self):
-        """Return discount percentage between cost_price and sale price.
-
-        Formula: ((cost_price - price) / cost_price) * 100
-        Returns Decimal with 2 decimal places or None if not applicable.
-        """
         try:
             if not self.cost_price or not self.price:
                 return None
             if self.cost_price <= 0:
                 return None
             pct = (Decimal(self.cost_price) - Decimal(self.price)) / Decimal(self.cost_price) * Decimal('100')
-            # allow negative result if markup; keep value
             return pct.quantize(Decimal('0.01'))
         except Exception:
             return None
@@ -1083,7 +823,6 @@ class ServiceBooking(models.Model):
         ('pending', 'Pending'),
         ('completed', 'Completed'),
     ]
-
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='service_bookings')
     service = models.ForeignKey(Service, on_delete=models.SET_NULL, null=True, related_name='bookings')
     booking_date = models.DateField()
@@ -1096,7 +835,6 @@ class ServiceBooking(models.Model):
 
 
 class SaleCustomer(models.Model):
-    """Customer records for offline/physical sales"""
     name = models.CharField(max_length=255)
     email = models.EmailField(blank=True, null=True)
     phone = models.CharField(max_length=20, blank=True, null=True)
@@ -1110,36 +848,29 @@ class SaleCustomer(models.Model):
     def __str__(self):
         return self.name
     
-    
     def total_sales_amount(self):
-        """Total amount of all sales for this customer"""
         return self.sales.aggregate(total=models.Sum('total_amount'))['total'] or Decimal('0.00')
     
     def total_paid_amount(self):
-        """Total amount paid for this customer"""
         return self.sales.aggregate(total=models.Sum('paid_amount'))['total'] or Decimal('0.00')
 
     def total_outstanding_amount(self):
-        """Total outstanding amount for this customer"""
         return self.sales.aggregate(total=models.Sum('outstanding_amount'))['total'] or Decimal('0.00')
 
     def sales_count(self):
-        """Number of sales for this customer"""
         return self.sales.count()
     
     def payment_status(self):
-        """Overall payment status"""
-        if self.total_outstanding_amount == 0 and self.total_sales_amount > 0:
+        if self.total_outstanding_amount() == 0 and self.total_sales_amount() > 0:
             return 'paid'
-        elif self.total_outstanding_amount > 0 and self.total_paid_amount > 0:
+        elif self.total_outstanding_amount() > 0 and self.total_paid_amount() > 0:
             return 'partially_paid'
-        elif self.total_outstanding_amount > 0:
+        elif self.total_outstanding_amount() > 0:
             return 'unpaid'
         return 'unpaid'
 
 
 class Sale(models.Model):
-    """Offline/Physical Sales Record"""
     PAYMENT_STATUS_CHOICES = [
         ('paid', 'Paid'),
         ('partially_paid', 'Partially Paid'),
@@ -1157,11 +888,9 @@ class Sale(models.Model):
     invoice_number = models.CharField(max_length=50, unique=True)
     sale_date = models.DateTimeField(auto_now_add=True)
     
-    # ADD THESE NEW FIELDS:
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Subtotal before tax')
-    tax_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0, help_text='Tax percentage applied')
-    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, help_text='Calculated tax amount')
-    
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    tax_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     outstanding_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -1169,7 +898,6 @@ class Sale(models.Model):
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='unpaid')
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES, blank=True, null=True)
     payment_notes = models.TextField(blank=True, null=True)
-    
     notes = models.TextField(blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1182,17 +910,12 @@ class Sale(models.Model):
         return f"Sale #{self.invoice_number} - {self.customer.name}"
     
     def save(self, *args, **kwargs):
-        """Auto-calculate outstanding amount and update payment status"""
         if not self.invoice_number:
-            # Generate invoice number
-            from django.utils import timezone
             timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
             self.invoice_number = f"SALE-{timestamp}"
         
-        # Calculate outstanding amount
         self.outstanding_amount = self.total_amount - self.paid_amount
         
-        # Update payment status
         if self.outstanding_amount <= 0:
             self.payment_status = 'paid'
         elif self.paid_amount > 0:
@@ -1202,32 +925,28 @@ class Sale(models.Model):
         
         super().save(*args, **kwargs)
 
+
 class SaleItem(models.Model):
-    """Individual items in a sale"""
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.IntegerField(default=1)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    
     created_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
     
     def save(self, *args, **kwargs):
-        """Auto-calculate total amount"""
         self.total_amount = self.quantity * self.unit_price
         super().save(*args, **kwargs)
 
 
 class SalePayment(models.Model):
-    """Payment records for sales"""
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='payments')
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     payment_method = models.CharField(max_length=20, choices=Sale.PAYMENT_METHOD_CHOICES)
     notes = models.TextField(blank=True, null=True)
-    
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -1235,3 +954,80 @@ class SalePayment(models.Model):
     
     def __str__(self):
         return f"Payment of Rs.{self.amount} for Sale #{self.sale.invoice_number}"
+
+
+# ===========================
+# SIGNALS
+# ===========================
+@receiver(post_save, sender=Order)
+def handle_order_payment_status_change(sender, instance, created, **kwargs):
+    """Auto-update order status to 'delivered' when payment is marked as 'paid'"""
+    if created:
+        return
+    
+    if instance.payment_status == 'paid':
+        if instance.status not in ['cancelled', 'refunded', 'delivered']:
+            Order.objects.filter(pk=instance.pk).update(
+                status='delivered',
+                delivered_at=timezone.now() if not instance.delivered_at else instance.delivered_at
+            )
+    
+    # Sync invoice payment status
+    try:
+        if instance.user:
+            invoice = Invoice.objects.filter(order=instance, customer=instance.user).first()
+            if invoice:
+                invoice_status_map = {
+                    "unpaid": "pending",
+                    "paid": "paid",
+                    "failed": "failed",
+                    "refunded": "failed"
+                }
+                new_invoice_status = invoice_status_map.get(instance.payment_status, invoice.payment_status)
+                if invoice.payment_status != new_invoice_status:
+                    invoice.payment_status = new_invoice_status
+                    invoice.save(update_fields=['payment_status'])
+    except Exception:
+        pass
+
+
+@receiver(post_save, sender=OrderItem)
+def update_order_totals_on_item_change(sender, instance, created, **kwargs):
+    """Recalculate Order totals whenever an OrderItem is created/updated"""
+    try:
+        if instance.order_id:
+            instance.order.calculate_totals()
+    except Exception:
+        pass
+
+
+@receiver(post_delete, sender=OrderItem)
+def update_order_totals_on_item_delete(sender, instance, **kwargs):
+    """Recalculate Order totals when an OrderItem is deleted"""
+    try:
+        if instance.order_id:
+            order = Order.objects.filter(pk=instance.order_id).first()
+            if order:
+                order.calculate_totals()
+    except Exception:
+        pass
+
+
+@receiver(post_save, sender=Order)
+def ensure_order_items_snapshots(sender, instance, created, **kwargs):
+    """Ensure order items have shipping snapshot filled"""
+    try:
+        for it in instance.items.all():
+            if (not it.shipping_cost or it.shipping_cost == 0) or not it.estimated_days:
+                it.save()
+    except Exception:
+        pass
+
+
+# ✅ FIX #2: CORRECT UserRole SIGNAL
+@receiver(post_save, sender=User)
+def create_user_role_and_profile(sender, instance, created, **kwargs):
+    """Automatically creates UserRole and UserProfile when a new user is created"""
+    if created and instance.is_superuser:
+        UserRole.objects.get_or_create(user=instance, defaults={'role': 'admin'})
+        UserProfile.objects.get_or_create(user=instance)

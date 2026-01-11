@@ -7,7 +7,7 @@ from dashboard.models import (
     Slider,
     Banner,
     Category,
-    Product,Cart,ProductVariant,OTPVerification,Order,OrderItem,Coupon,CouponUsage,Contact,TaxCost,Invoice
+    Product,Cart,OTPVerification,Order,OrderItem,Coupon,CouponUsage,TaxCost,Invoice
 )
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from  django.contrib import messages

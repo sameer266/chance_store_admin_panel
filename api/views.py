@@ -2,7 +2,7 @@
 #     Mobile App API Views
 # ========================================
 from django.shortcuts import get_object_or_404
-from dashboard.models import UserProfile,UserRole,OTPVerification,Slider, Product,ProductVariant,ProductImage,Category,Cart, Order,UserProfile, OrderItem, Review, Coupon, Newsletter, Contact, Notification, CouponUsage,TaxCost
+from dashboard.models import UserProfile,UserRole,OTPVerification,Slider, Product,Category,Cart, Order,UserProfile, OrderItem, Review, Coupon, Notification, CouponUsage,TaxCost
 from django.contrib.auth.models import User
 from decimal import Decimal
 from django.db import transaction
@@ -109,17 +109,20 @@ class LogoutView(APIView):
             logger.error(f"Logout error: {str(e)}")
             return Response({'success':False,'error':str(e)},status=400)
 
-
+from django.conf import settings
 # ============ Register =============
 class RegisterApiView(APIView):
     def post(self,request):
         try:
+            print("+--sadasdas")    
+            
             first_name=request.data.get('first_name')
             last_name=request.data.get('last_name')
             email=request.data.get('email')
             password=request.data.get('password')
             if User.objects.filter(email=email,is_active=True).exists():
                 return Response({'success':False,'error':"User already found"},status=400)
+            print("+--sadasdas")    
             
             user=User.objects.create_user(
                 username=email,
@@ -134,12 +137,13 @@ class RegisterApiView(APIView):
             otp_obj.otp_code=otp
             otp_obj.save()
             send_mail(
-                subject="Your Hello Bajar OTP Verification Code",
+                subject="Your ChanceOnline Store OTP Verification Code",
                 message=f"Hello {first_name},\n\nYour OTP code is: {otp}.",
                 from_email="hellobajar@gmail.com",
                 recipient_list=[email],
                 fail_silently=False
             )
+            print("+--sadasdas")    
             return Response({'success':True,'message':'User registered successfully. Please verify OTP sent to your email.'},status=201)    
         except Exception as e:
             return Response({'success':False,'error':str(e)})
@@ -163,7 +167,7 @@ class  ResendOtpApiView(APIView):
             send_mail(
                 subject="Your Hello Bajar OTP Verification Code",
                 message=f"Hello {user.first_name},\n\nYour OTP code is: {otp}.",
-                from_email="hellobajar@gmail.com",
+                from_email="chanceonlinestore@gmail.com",
                 recipient_list=[email],
                 fail_silently=False
             )
@@ -172,54 +176,6 @@ class  ResendOtpApiView(APIView):
         except Exception as e:
             return Response({'success':False,'error':str(e)},status=400)
         
-
-# ============ Register =============
-class RegisterApiView(APIView):
-    def post(self, request):
-        try:
-            first_name = request.data.get('first_name')
-            last_name = request.data.get('last_name')
-            email = request.data.get('email')
-            password = request.data.get('password')
-
-            # Check if active user already exists
-            if User.objects.filter(email=email, is_active=True).exists():
-                return Response({'success': False, 'error': "User already exists"}, status=400)
-
-            if User.objects.filter(email=email,is_active=False).exists():
-                user=User.objects.get(email=email)
-                user.first_name=first_name
-                user.last_name=last_name
-                user.save()
-            else:
-                user = User.objects.create_user(
-                    username=email,
-                    email=email,
-                    password=password,
-                    first_name=first_name,
-                    last_name=last_name,
-                    is_active=False
-                )
-
-            # Generate OTP and save
-            otp = str(random.randint(100000, 999999))
-            otp_obj, _ = OTPVerification.objects.get_or_create(user=user)
-            otp_obj.otp_code = otp
-            otp_obj.save()
-
-            # Send OTP via email
-            send_mail(
-                subject="Your Hello Bajar OTP Verification Code",
-                message=f"Hello {first_name},\n\nYour OTP code is: {otp}.",
-                from_email="hellobajar@gmail.com",
-                recipient_list=[email],
-                fail_silently=False
-            )
-
-            return Response({'success': True, 'message': 'User registered successfully. Please verify OTP sent to your email.'}, status=201)
-
-        except Exception as e:
-            return Response({'success': False, 'error': str(e)}, status=400)
 
 
 # =========== Verify OTP =============
@@ -325,7 +281,7 @@ class ForgetPasswordApiView(APIView):
             send_mail(
                 subject="Your Password Reset OTP",
                 message=f"Your OTP for password reset is {otp} .",
-                from_email="hellobajar@gmail.com",
+                from_email="chanceonlinestore@gmail.com",
                 recipient_list=[email],
                 fail_silently=False
             )
@@ -631,26 +587,8 @@ class ProductDetailsApiView(APIView):
             "brand": product.brand.name if product.brand else None,
             "main_image": product.main_image.url if product.main_image else None,
             "shipping_cost": product.shipping_cost,
-            "estimated_delivery_days": product.estimated_delivery_days,
+            "estimated_delivery_days": product.estimated_days,
         }
-
-        # Gallery images
-        product_data["gallery"] = [
-            img.image.url
-            for img in ProductImage.objects.filter(product=product)
-            if img.image
-        ]
-
-        # Variants
-        product_data["variants"] = [
-            {
-                "id": v.id,
-                "variant_type": v.get_variant_type_display(),
-                "name": v.name,
-                "price_adjustment": v.price_adjustment,
-            }
-            for v in ProductVariant.objects.filter(product=product)
-        ]
 
         return Response(
             {
@@ -895,7 +833,6 @@ class CustomerOrderDetailsApiView(APIView):
                 'discount': order.discount,
                 'tax_amount': order.tax,
                 'total_amount': order.total,
-                'estimated_delivery_date': order.estimated_delivery_date,
                 'status': order.status,
                 'created_at': order.created_at,
             }
@@ -991,7 +928,7 @@ class CheckoutApiView(APIView):
                         quantity=item.quantity,
                         price=item.get_item_price()
                     )
-                    order_item.variant.set(item.variant.all())
+                   
                     item.product.stock = F('stock') - item.quantity
                     item.product.save()
                 

@@ -15,8 +15,8 @@ from django.contrib.auth.models import User
 from django.http import JsonResponse
 from django.contrib import messages
 from .models import (
-    UserRole, Category, Product, ProductImage, ProductVariant, Order, OrderItem, Invoice,
-    Review, Coupon,  Organization, Newsletter, Contact, 
+    UserRole, Category, Product,  Order, OrderItem, Invoice,
+    Review, Coupon,  Organization,
     Notification, Slider, Banner, TaxCost, Supplier, Purchase, PurchaseItem, PurchaseInvoice, PurchaseInvoiceItem,
     Sale, SaleCustomer, SaleItem, SalePayment,
     Service, ServiceBooking
@@ -34,31 +34,63 @@ def admin_required(view_func):
 
 
 
-def _create_product_from_purchase_item(name, sku, purchase_price, selling_price, estimated_days, quantity, supplier, image_file=None, category_id=None):
-    """Helper to create product from purchase item data"""
-    product_data = {
-        'name': name,
-        'sku': sku or None,
-        'cost_price': purchase_price,
-        'price': selling_price,
-        'estimated_days': estimated_days if estimated_days else None,
-        'stock': quantity,
-        'is_active': True,
-    }
+# Helper function to create product with cut_price
+def _create_product_from_purchase_item(name, sku, purchase_price, selling_price, cut_price, 
+                                       estimated_days, quantity, supplier, image_file=None, 
+                                       category_id=None):
+    """
+    Helper function to create a new product from purchase item data.
+    Returns (product, created) tuple.
+    """
+    try:
+        # Get or create category
+        category = None
+        if category_id:
+            try:
+                category = Category.objects.get(pk=category_id)
+            except Category.DoesNotExist:
+                # Create a default category if not found
+                category, _ = Category.objects.get_or_create(
+                    name='Uncategorized',
+                    defaults={'slug': 'uncategorized', 'is_active': True}
+                )
+        else:
+            # Create or get default category
+            category, _ = Category.objects.get_or_create(
+                name='Uncategorized',
+                defaults={'slug': 'uncategorized', 'is_active': True}
+            )
+        
+        # Create product
+        product = Product(
+            name=name,
+            category=category,
+            sku=sku or None,  # Let model auto-generate if empty
+            cost_price=purchase_price,
+            price=selling_price,
+            cut_price=cut_price, 
+            estimated_days=estimated_days or '',
+            stock=quantity,
+            description=f'Product added from purchase order (Supplier: {supplier.name})',
+            is_active=True,
+        )
+        
+        # Save image if provided
+        if image_file:
+            product.main_image = image_file
+        
+        product.save()
+        
+        return product, True
+        
+    except Exception as e:
+        print(f"ERROR creating product: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise
     
-    if category_id:
-        try:
-            product_data['category_id'] = int(category_id)
-        except (ValueError, TypeError):
-            pass
     
-    product = Product.objects.create(**product_data)
     
-    if image_file:
-        product.main_image = image_file
-        product.save(update_fields=['main_image'])
-    
-    return product, True
 def ensure_purchase_invoice(purchase):
     """
     Ensure a purchase has an invoice with all its items.
@@ -226,8 +258,7 @@ def admin_dashboard(request):
     active_banners = Banner.objects.filter(is_active=True).count()
     active_home_categories = Category.objects.filter(is_featured=True).count()
     total_reviews = Review.objects.count()
-    unread_contacts = Contact.objects.filter(is_read=False).count()
-    newsletter_subscribers = Newsletter.objects.filter(is_active=True).count()
+  
     unread_notifications = Notification.objects.filter(is_read=False).count()
 
     context = {
@@ -245,8 +276,6 @@ def admin_dashboard(request):
         'active_banners': active_banners,
         'active_home_categories': active_home_categories,
         'total_reviews': total_reviews,
-        'unread_contacts': unread_contacts,
-        'newsletter_subscribers': newsletter_subscribers,
         'unread_notifications': unread_notifications,
         'revenue_labels': revenue_labels,
         'revenue_data': revenue_data,
@@ -558,117 +587,57 @@ def admin_product_add(request):
         else:
             product.save()
 
-        # Handle gallery images (multiple)
-        for img in request.FILES.getlist('gallery_images'):
-            ProductImage.objects.create(product=product, image=img)
-
-        # Handle variants: expect arrays variant_type[], variant_name[], variant_price_adjustment[], variant_stock[], variant_sku[]
-        variant_types = request.POST.getlist('variant_type[]')
-        variant_names = request.POST.getlist('variant_name[]')
-        variant_price_adjustments = request.POST.getlist('variant_price_adjustment[]')
-        
-
-        for i in range(len(variant_names)):
-            name = variant_names[i].strip()
-            if not name:
-                continue
-            ProductVariant.objects.create(
-                product=product,
-                variant_type=variant_types[i] if i < len(variant_types) and variant_types[i] else 'other',
-                name=name,
-                price_adjustment=Decimal(variant_price_adjustments[i]) if i < len(variant_price_adjustments) and variant_price_adjustments[i] else 0,
-            )
-
         return redirect('admin_products_list')
     categories = Category.objects.filter(is_active=True)
    
     return render(request, 'dashboard/pages/product/add_product.html', {'categories': categories, })
 
+
 @admin_required
 def admin_product_update(request, pk):
     product = get_object_or_404(Product, pk=pk)
+
     if request.method == 'POST':
+        # Category
         category_id = request.POST.get('category')
         product.category = get_object_or_404(Category, pk=category_id)
+
+        # Basic info
         product.name = request.POST.get('name')
         product.description = request.POST.get('description')
+
+        # Pricing
         product.price = Decimal(request.POST.get('price'))
         product.cost_price = Decimal(request.POST.get('cost_price')) if request.POST.get('cost_price') else None
+        product.cut_price = Decimal(request.POST.get('cut_price')) if request.POST.get('cut_price') else None  # NEW
+
+        # Stock
         product.stock = int(request.POST.get('stock', 0))
-        # update per-product shipping and delivery estimates
+        product.low_stock_alert = int(request.POST.get('low_stock_alert', 5))
+
+        # Product Details
+        product.brand = request.POST.get('brand', '')
+        product.weight = Decimal(request.POST.get('weight')) if request.POST.get('weight') else None
+        product.is_featured = True if request.POST.get('is_featured') == 'on' else False
+
+        # Shipping & ETA
         try:
             product.shipping_cost = Decimal(request.POST.get('shipping_cost')) if request.POST.get('shipping_cost') else Decimal('0.00')
         except Exception:
             product.shipping_cost = Decimal('0.00')
         product.estimated_days = request.POST.get('estimated_days', '') or None
-        product.low_stock_alert = int(request.POST.get('low_stock_alert', 5))
-        product.brand = request.POST.get('brand', '')
-        product.weight = Decimal(request.POST.get('weight')) if request.POST.get('weight') else None
-        product.is_featured = True if request.POST.get('is_featured') == 'on' else False
 
+        # Main Image
         if request.FILES.get('main_image'):
             product.main_image = request.FILES['main_image']
+
+        # Save the product
         product.save()
 
-        # Append new gallery images if any
-        for img in request.FILES.getlist('gallery_images'):
-            ProductImage.objects.create(product=product, image=img)
-
-        # Update existing variants and optionally delete
-        existing_ids = request.POST.getlist('existing_variant_id[]')
-        existing_types = request.POST.getlist('existing_variant_type[]')
-        existing_names = request.POST.getlist('existing_variant_name[]')
-        existing_price_adjustments = request.POST.getlist('existing_variant_price_adjustment[]')
-        
-        delete_ids = set(request.POST.getlist('existing_variant_delete[]'))
-
-        for idx in range(len(existing_ids)):
-            variant_id = existing_ids[idx]
-            try:
-                variant = ProductVariant.objects.get(id=variant_id, product=product)
-            except ProductVariant.DoesNotExist:
-                continue
-
-            if variant_id in delete_ids:
-                variant.delete()
-                continue
-
-            name_val = existing_names[idx].strip() if idx < len(existing_names) else variant.name
-            if not name_val:
-                # skip empty names to avoid unique_together issues
-                continue
-            variant.variant_type = existing_types[idx] if idx < len(existing_types) and existing_types[idx] else variant.variant_type
-            variant.name = name_val
-            variant.price_adjustment = Decimal(existing_price_adjustments[idx]) if idx < len(existing_price_adjustments) and existing_price_adjustments[idx] else Decimal('0')
-            try:
-                variant.save()
-            except Exception:
-                # Silently ignore unique constraint conflicts for now
-                pass
-
-        # Append new variants from form
-        variant_types = request.POST.getlist('variant_type[]')
-        variant_names = request.POST.getlist('variant_name[]')
-        variant_price_adjustments = request.POST.getlist('variant_price_adjustment[]')
-        
-
-        for i in range(len(variant_names)):
-            name = variant_names[i].strip()
-            if not name:
-                continue
-            try:
-                ProductVariant.objects.create(
-                    product=product,
-                    variant_type=variant_types[i] if i < len(variant_types) and variant_types[i] else 'other',
-                    name=name,
-                    price_adjustment=Decimal(variant_price_adjustments[i]) if i < len(variant_price_adjustments) and variant_price_adjustments[i] else 0,
-                )
-            except Exception:
-                # Ignore duplicates violating unique_together
-                pass
         return redirect('admin_products_list')
+
+    # GET request
     categories = Category.objects.filter(is_active=True)
-  
     return render(request, 'dashboard/pages/product/edit_product.html', {
         'product': product,
         'categories': categories,
@@ -1166,26 +1135,18 @@ def admin_order_items_json(request, order_number):
     order = get_object_or_404(Order, order_number=order_number)
     items = []
 
-    for item in order.items.select_related('product', 'variant').all():
-        # Get all variants for the product
-        all_variants = []
-        for variant in item.product.variants.all():
-            all_variants.append({
-                'variant_type': variant.get_variant_type_display(),
-                'name': variant.name,
-                'price_adjustment': str(variant.price_adjustment),
-            })
+    for item in order.items.select_related('product').all():
+
 
         items.append({
             'product_name': item.product.name,
-            'selected_variant': item.variant.name if item.variant else '',
             'quantity': item.quantity,
             'price': str(item.price),
             'shipping_cost': str(item.shipping_cost),
             'estimated_days': item.estimated_days or '',
             'total': str(item.get_total()),
             'image_url': item.product.main_image.url if item.product.main_image else '',
-            'all_variants': all_variants,
+         
         })
 
     return JsonResponse({'success': True, 'items': items})
@@ -1318,14 +1279,13 @@ def admin_slider_add(request):
     if request.method == 'POST':
         title = request.POST.get('title', '')
         subtitle = request.POST.get('subtitle', '')
-        link = request.POST.get('link', '')
         image = request.FILES.get('image')  
 
         # Create the slider
         slider = Slider.objects.create(
             title=title,
             subtitle=subtitle,
-            link=link,
+          
             image=image
         )
 
@@ -1987,9 +1947,11 @@ def admin_purchase_add(request):
             product_categories = request.POST.getlist('product_category[]')
             purchase_prices = request.POST.getlist('purchase_price[]')
             selling_prices = request.POST.getlist('selling_price[]')
+            cut_prices = request.POST.getlist('cut_price[]')  
             estimated_days_list = request.POST.getlist('estimated_days[]')
             quantities = request.POST.getlist('quantity[]')
             bill_number = request.POST.get('bill_number', '').strip()
+            
             if not bill_number:
                 messages.error(request, 'Bill number is required.')
                 raise ValueError('Bill number is required')
@@ -2033,6 +1995,17 @@ def admin_purchase_add(request):
                     product_id = product_ids[i] if i < len(product_ids) and product_ids[i] else ''
                     purchase_price = Decimal(purchase_prices[i]) if i < len(purchase_prices) else Decimal('0')
                     selling_price = Decimal(selling_prices[i]) if i < len(selling_prices) else Decimal('0')
+                    
+                    cut_price = None
+                    if i < len(cut_prices) and cut_prices[i]:
+                        try:
+                            cut_price_val = Decimal(cut_prices[i])
+                            # Only set cut_price if it's greater than 0
+                            if cut_price_val > 0:
+                                cut_price = cut_price_val
+                        except (ValueError, TypeError):
+                            cut_price = None
+                    
                     estimated_days = estimated_days_list[i].strip() if i < len(estimated_days_list) else ''
                     quantity = int(quantities[i]) if i < len(quantities) else 1
                     
@@ -2051,11 +2024,22 @@ def admin_purchase_add(request):
                     if product_id:
                         try:
                             product = Product.objects.get(pk=product_id)
+                            # Update existing product
                             product.cost_price = purchase_price
                             product.price = selling_price
+                            
+                            #  Update cut_price
+                            if cut_price is not None:
+                                product.cut_price = cut_price
+                            
                             if estimated_days:
                                 product.estimated_days = estimated_days
-                            product.save(update_fields=['cost_price', 'price', 'estimated_days'])
+                            
+                            # Save with updated fields
+                            update_fields = ['cost_price', 'price', 'estimated_days']
+                            if cut_price is not None:
+                                update_fields.append('cut_price')
+                            product.save(update_fields=update_fields)
                             updated_products += 1
                         except Product.DoesNotExist:
                             pass
@@ -2067,6 +2051,7 @@ def admin_purchase_add(request):
                             sku='',
                             purchase_price=purchase_price,
                             selling_price=selling_price,
+                            cut_price=cut_price,  
                             estimated_days=estimated_days,
                             quantity=quantity,
                             supplier=supplier,
@@ -2100,7 +2085,7 @@ def admin_purchase_add(request):
                             product.save(update_fields=['stock'])
                     
                     items_added += 1
-                    print(f"DEBUG: Added item {i+1}: {product_name}, Qty: {quantity}, Price: {purchase_price}")
+                    print(f"DEBUG: Added item {i+1}: {product_name}, Qty: {quantity}, Price: {purchase_price}, Cut Price: {cut_price}")
                 
                 if items_added == 0:
                     raise ValueError('No valid products were added.')
@@ -2113,8 +2098,7 @@ def admin_purchase_add(request):
                 created_items_count = purchase.items.count()
                 print(f"DEBUG: Total items in database: {created_items_count}")
                 
-                # ✅ CRITICAL FIX: Create invoice AFTER all items are saved
-                # This ensures all PurchaseItems exist before creating PurchaseInvoiceItems
+                # Create invoice AFTER all items are saved
                 invoice = ensure_purchase_invoice(purchase)
                 
                 if invoice:
@@ -2153,7 +2137,9 @@ def admin_purchase_add(request):
         'categories': categories,
         'selected_supplier_id': selected_supplier_id,
     })
-
+    
+    
+    
 @admin_required
 def admin_purchase_update(request, pk):
     purchase = get_object_or_404(Purchase, pk=pk)
