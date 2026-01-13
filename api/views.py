@@ -2,7 +2,7 @@
 #     Mobile App API Views
 # ========================================
 from django.shortcuts import get_object_or_404
-from dashboard.models import UserProfile,UserRole,OTPVerification,Slider, Product,Category,Cart, Order,UserProfile, OrderItem, Review, Coupon, Notification, CouponUsage,TaxCost
+from dashboard.models import UserProfile,UserRole,OTPVerification,Slider, Product,Category,Cart, Order,UserProfile, OrderItem, Review, Coupon, Notification, CouponUsage,TaxCost,Service,ServiceBooking
 from django.contrib.auth.models import User
 from decimal import Decimal
 from django.db import transaction
@@ -21,40 +21,6 @@ from django.db.models import Q
 
 
 
-# ========= Utility Function to Clean HTML Text ==========
-import re
-from django.utils.html import strip_tags
-
-
-def clean_ckeditor_text(html_text):
-    """
-    Clean CKEditor content and return readable plain text.
-    Splits common product info fields onto separate lines.
-    """
-    if not html_text:
-        return ""
-
-    # Remove HTML tags
-    text = strip_tags(html_text)
-
-    # Replace <br> and tabs with newline
-    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-    text = text.replace('\t', ' ')
-
-    # Normalize spaces
-    text = re.sub(r' +', ' ', text)
-
-    # Split on common product info keywords and add newline
-    # This works well if CKEditor saves everything in one paragraph
-    keywords = ['Brand:', 'Manufacturer:', 'Country of Origin:', 'Sold by:', 'Volume:']
-    for kw in keywords:
-        text = text.replace(kw, f'\n{kw}')
-
-    # Remove extra newlines
-    lines = [line.strip() for line in text.split('\n')]
-    text = '\n'.join([line for line in lines if line])
-
-    return text
 
 
 # ========= Login =============
@@ -570,34 +536,83 @@ class SearchProductsApiView(APIView):
 class ProductDetailsApiView(APIView):
 
     def get(self, request, id):
-        product = get_object_or_404(
-            Product,
-            pk=id
-        )
+        product = get_object_or_404(Product, id=id, is_active=True)
 
-        product_data = {
+
+
+        data = {
             "id": product.id,
             "name": product.name,
-            "slug": product.slug,
-            "description": clean_ckeditor_text(product.description),
-            "price": product.price,
-            "cost_price": product.cost_price,
+            "description": product.description,
+            "price": str(product.price),
+            "cut_price": str(product.cut_price) if product.cut_price else None,
+            "discount_percentage": product.discount_percentage(),
             "in_stock": product.in_stock(),
+            "stock": product.stock,
             "category": product.category.name if product.category else None,
-            "brand": product.brand.name if product.brand else None,
-            "main_image": product.main_image.url if product.main_image else None,
-            "shipping_cost": product.shipping_cost,
+
+            "shipping_cost": str(product.shipping_cost),
             "estimated_delivery_days": product.estimated_days,
+
+            "image": product.main_image.url if product.main_image else None,
+            "created_at": product.created_at,
         }
 
-        return Response(
-            {
-                "success": True,
-                "product": product_data
-            },
-            status=status.HTTP_200_OK
-        )
-        
+        return Response({
+            "success": True,
+            "product": data
+        })
+
+
+
+# ============ View Cart ==============
+class ViewCartAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        cart_items = Cart.objects.filter(user=user)
+
+        items = []
+        subtotal = Decimal("0.00")
+        shipping_total = Decimal("0.00")
+
+        for item in cart_items:
+            item_total = item.product.price * item.quantity
+            shipping_cost = (item.product.shipping_cost or 0) * item.quantity
+
+            subtotal += item_total
+            shipping_total += Decimal(shipping_cost)
+
+            items.append({
+                "cart_id": item.id,
+                "product_id": item.product.id,
+                "name": item.product.name,
+                "price": str(item.product.price),
+                "quantity": item.quantity,
+                "item_total": str(item_total),
+                "shipping_cost": str(shipping_cost),
+                "image": item.product.main_image.url if item.product.main_image else None
+            })
+
+        # TAX calculation
+        tax_obj = TaxCost.objects.first()
+        tax_percentage = tax_obj.tax if tax_obj else Decimal("0.00")
+        tax_amount = (subtotal * tax_percentage) / 100
+
+        grand_total = subtotal + shipping_total + tax_amount
+
+        return Response({
+            "success": True,
+            "items": items,
+            "summary": {
+                "subtotal": str(subtotal),
+                "shipping_total": str(shipping_total),
+                "tax_percentage": str(tax_percentage),
+                "tax_amount": str(tax_amount),
+                "grand_total": str(grand_total)
+            }
+        })
         
         
 # ============ Category Products =============
@@ -654,29 +669,56 @@ class AddToCartApiView(APIView):
         
 
 # ========== View Cart =============
-class ViewCartApiView(APIView):
-    permission_classes=[IsAuthenticated]
-    authentication_classes=[JWTAuthentication]
-    
-    def get(self,request):
-        try:
-            user=request.user
-            cart_items=Cart.objects.filter(user=user)
-            cart_data=[]
-            for item in cart_items:
-                cart_data.append({
-                    'id':item.id,
-                    'product_id':item.product.id,
-                    'product_name':item.product.name,
-                    'image':item.product.main_image.url,
-                    'quantity':item.quantity,
-                    'price':item.product.price,
-                    'total_price':item.product.price * item.quantity,
-                })
-            return Response({'success':True,'cart_items':cart_data},status=200)
-        except Exception as e:
-            return Response({'success':False,'error':str(e)},status=400)
-        
+
+class ViewCartAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        cart_items = Cart.objects.filter(user=user)
+
+     
+
+        items = []
+        subtotal = Decimal("0.00")
+        shipping_total = Decimal("0.00")
+
+        for item in cart_items:
+            item_total = item.product.price * item.quantity
+            shipping_cost = (item.product.shipping_cost or 0) * item.quantity
+
+            subtotal += item_total
+            shipping_total += Decimal(shipping_cost)
+
+            items.append({
+                "cart_id": item.id,
+                "product_id": item.product.id,
+                "name": item.product.name,
+                "price": str(item.product.price),
+                "quantity": item.quantity,
+                "item_total": str(item_total),
+                "shipping_cost": str(shipping_cost),
+                "image": item.product.main_image.url if item.product.main_image else None
+            })
+
+        # TAX calculation
+        tax_obj = TaxCost.objects.first()
+        tax_percentage = tax_obj.tax if tax_obj else Decimal("0.00")
+        tax_amount = (subtotal * tax_percentage) / 100
+
+        grand_total = subtotal + shipping_total + tax_amount
+
+        return Response({
+            "success": True,
+            "items": items,
+            "summary": {
+                "subtotal": str(subtotal),
+                "shipping_total": str(shipping_total),
+                "tax_percentage": str(tax_percentage),
+                "tax_amount": str(tax_amount),
+                "grand_total": str(grand_total)
+            }
+        })  
         
         
  
@@ -798,6 +840,7 @@ class CustomerOrderHistoryApiView(APIView):
 
 
 # ============= Order Details API View =============
+
 class CustomerOrderDetailsApiView(APIView):
     permission_classes = [IsAuthenticated]
     authentication_classes = [JWTAuthentication]
@@ -806,40 +849,56 @@ class CustomerOrderDetailsApiView(APIView):
         try:
             user = request.user
             order = get_object_or_404(Order, id=order_id, user=user)
-            
+            estimated_days = 0
+            for item in order.items.all():
+                if item.product.estimated_days:
+                    estimated_days = max(estimated_days, item.product.estimated_days)
+
             order_data = {
                 'id': order.id,
+                'order_number': order.order_number,
+
                 'products': [
                     {
                         'product_name': item.product.name,
                         'main_image': item.product.main_image.url if item.product.main_image else None,
                         'quantity': item.quantity,
                         'price': item.price,
-                        
-                    } 
-                    for item in order.items.all() 
+                        'estimated_days': item.product.estimated_days,
+                    }
+                    for item in order.items.all()
                 ],
-                
-                'order_number': order.order_number,
+
                 'subtotal': order.subtotal,
                 'shipping_cost': order.shipping_cost,
-                'shipping_full_name': order.full_name,
-                'shipping_phone': order.phone,
-                'shipping_address': order.address,
-                'shiiping_city': order.city,
-                'shipping_province': order.province,
-                'shipping_email': order.email,
-                'shipping_postal_code': order.postal_code,
                 'discount': order.discount,
                 'tax_amount': order.tax,
                 'total_amount': order.total,
+
+                # Shipping info
+                'shipping_full_name': order.full_name,
+                'shipping_phone': order.phone,
+                'shipping_address': order.address,
+                'shipping_city': order.city,
+                'shipping_province': order.province,
+                'shipping_email': order.email,
+                'shipping_postal_code': order.postal_code,
+
+                # Status
                 'status': order.status,
                 'created_at': order.created_at,
+
+                #  Estimated Delivery
+                'estimated_delivery_days': estimated_days,
+              
             }
+
             return Response({'success': True, 'order': order_data}, status=200)
+
         except Exception as e:
-            return Response({'success': False, 'error': str(e)}, status=400)
-      
+            return Response({'success': False, 'error': str(e)}, status=400)   
+
+
 
 # ============= Change Password API View =============
 class ChangePasswordApiView(APIView):
@@ -1057,3 +1116,106 @@ class NotificationApiView(APIView):
             return Response({'success':True, 'notifications': data}, status=200)
         except Exception as e:
             return Response({'success':False, 'error':str(e)}, status=400)
+
+
+
+# ========================
+#   Services
+# =========================
+class ServiceListAPIView(APIView):
+
+    def get(self, request):
+        search = request.GET.get('search')
+        services = Service.objects.all()
+
+        if search:
+            services = services.filter(name__icontains=search)
+
+        data = []
+        for service in services:
+            data.append({
+                'id': service.id,
+                'name': service.name,
+                'description': service.description,
+                'price': service.price,
+                'cost_price': service.cost_price if service.cost_price else None,
+                'discount_percentage': service.discount_percentage(),
+                'image': service.image.url if service.image else None,
+            })
+
+        return Response({
+            'success': True,
+            'count': len(data),
+            'data': data
+        })
+        
+        
+        
+        
+class ServiceDetailAPIView(APIView):
+
+    def get(self, request, pk):
+        service = get_object_or_404(Service, id=pk)
+
+        return Response({
+            'success': True,
+            'service': {
+                'id': service.id,
+                'name': service.name,
+                'description': service.description,
+                'price': service.price,
+                'cost_price': service.cost_price if service.cost_price else None,
+                'discount_percentage': service.discount_percentage(),
+                'image': service.image.url if service.image else None,
+            }
+        })
+
+        
+        
+        
+class ServiceBookingAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            service_id = request.data.get('service_id')
+            booking_date = request.data.get('booking_date')
+
+            service = get_object_or_404(Service, id=service_id)
+
+            booking = ServiceBooking.objects.create(
+                customer=request.user,
+                service=service,
+                booking_date=booking_date
+            )
+
+            return Response({
+                'success': True,
+                'message': 'Service booked successfully',
+                'booking_id': booking.id
+            })
+
+        except Exception as e:
+            return Response({'success': False, 'error': str(e)}, status=400)
+
+
+class MyServiceBookingAPiView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        bookings = ServiceBooking.objects.filter(customer=request.user)
+
+        data = []
+        for booking in bookings:
+            data.append({
+                'id': booking.id,
+                'service': booking.service.name,
+                'date': booking.booking_date,
+                'status': booking.status
+            })
+
+        return Response({
+            'success': True,
+            'bookings': data
+        })
+           

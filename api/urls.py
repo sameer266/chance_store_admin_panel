@@ -44,7 +44,7 @@ urlpatterns = [
 
 
     # Cart APIs
-    path('cart/', views.ViewCartApiView.as_view()),
+    path('cart/', views.ViewCartAPIView.as_view()),
     path('cart-add/', views.AddToCartApiView.as_view()),
     path('cart-update/', views.UpdateCartItemApiView.as_view()),
     path('cart-remove/', views.RemoveFromCartApiView.as_view()),
@@ -70,5 +70,12 @@ urlpatterns = [
 
     # Notification API
     path('notifications/', views.NotificationApiView.as_view()),
+    
+    
+    # ========  Service API  ==========
+    path('services/',views.ServiceListAPIView.as_view()),
+    path('services/<int:pk>/',views.ServiceDetailAPIView.as_view()),
+    path('services/book/',views.ServiceBookingAPIView.as_view()),
+    path('services/my-bookings/',views.MyServiceBookingAPiView.as_view()),
     
 ]
